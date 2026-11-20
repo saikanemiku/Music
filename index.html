@@ -1024,9 +1024,9 @@ async function loadCurrent(autoplay, ov) {
         const bp = () => (G.ctx.currentTime - ov.t0) * ov.rate;
         try { audio.currentTime = bp() + OV_LOAD; } catch {}
         await audio.play();
-        OV_LOAD = Math.max(0.1, Math.min(1.5, OV_LOAD - (audio.currentTime - bp())));
-        rampFade(0, 1, 0.5, 'in'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.5, 'out', () => S.ov === ov);
-        setTimeout(() => killOv(ov), 700);
+        OV_LOAD = Math.max(0.1, Math.min(1.5, OV_LOAD - (audio.currentTime - bp()))); ls.set('mp.ovload', OV_LOAD);
+        rampFade(0, 1, 0.8, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.8, 'lin', () => S.ov === ov);
+        setTimeout(() => killOv(ov), 1000);
         return;
       }
       await audio.play();
@@ -1035,7 +1035,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v15';
+const APP_VER = 'v16';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1051,14 +1051,14 @@ function fadeWhy() {
   return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
 }
 setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + APP_VER; }, 500);
-let OV_LOAD = 0.35;
+let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35;
 function ramp2(param, from, to, secs, shape, alive) {
   const t0 = performance.now(), ms = Math.max(0.1, secs) * 1000;
   const step = () => {
     if (!alive()) return;
     const f = Math.min(1, (performance.now() - t0) / ms);
     const k = shape === 'in' ? Math.sin(f * Math.PI / 2) : Math.cos(f * Math.PI / 2);
-    try { param.value = shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
+    try { param.value = shape === 'lin' ? from + (to - from) * f : shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
     if (f < 1) setTimeout(step, 40);
   };
   step();
@@ -1106,7 +1106,7 @@ function rampFade(from, to, secs, shape) {
     if (my !== rampTok || !G.ready) return;
     const f = Math.min(1, (performance.now() - t0) / ms);
     const k = shape === 'in' ? Math.sin(f * Math.PI / 2) : Math.cos(f * Math.PI / 2);
-    try { G.fade.gain.value = shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
+    try { G.fade.gain.value = shape === 'lin' ? from + (to - from) * f : shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
     if (f < 1) setTimeout(step, 40);
   };
   step();
@@ -1268,7 +1268,7 @@ function maybeCrossfade() {
   if (!x || xf || S.ov || S.dipping || S.seeking || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
-  if (S.ov) return;
+  if (S.ov || Date.now() < S.holdUntil + 600) return;
   if (audio.currentTime > 1.5 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
   if (rem <= x && rem > 0.3 && startOverlap(rem)) return;
   const h2 = Math.max(1, x / 2);
