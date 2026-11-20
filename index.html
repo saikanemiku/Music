@@ -358,7 +358,7 @@ async function dbClear(s) { const t = db.transaction(s, 'readwrite'); t.objectSt
 
 /* ===================== Estado ===================== */
 const THEME_DEFAULT = { accent: '#1ed760', bg: '#121212', surface: '#262626', text: '#ffffff', sec: '#b3b3b3', radius: 8, font: 'system', name: '', quick: true, recent: true, played: true, most: true, albums: true, artists: true, circle: true, compact: false };
-const AUDIO_DEFAULT = { eq: true, bands: Array(10).fill(0), preset: 'Plano', preamp: 0, headroom: true, rev: 0, room: 3, rate: 1, keepPitch: true, bal: 0 };
+const AUDIO_DEFAULT = { eq: true, bands: Array(10).fill(0), preset: 'Plano', preamp: 0, headroom: true, rev: 0, room: 3, rate: 1, keepPitch: true, bal: 0, xfade: 0 };
 const THEME_PRESETS = [
   ['Verde clásico', '#1ed760', '#121212', '#262626', '#ffffff', '#b3b3b3'],
   ['OLED negro', '#1ed760', '#000000', '#141414', '#ffffff', '#9a9a9a'],
@@ -843,7 +843,10 @@ function buildGraph() {
     G.filters = EQ_F.map((f, i) => { const b = ctx.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === 9 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1.1; b.gain.value = 0; return b; });
     G.conv = ctx.createConvolver(); G.dry = ctx.createGain(); G.wet = ctx.createGain();
     G.pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
-    let node = G.src; node.connect(G.pre); node = G.pre;
+    G.fade = ctx.createGain(); G.src.connect(G.fade); G.fade.connect(G.pre);
+    G.ghost = new Audio(); G.ghost.setAttribute('playsinline', ''); G.ghost.preload = 'auto';
+    G.gsrc = ctx.createMediaElementSource(G.ghost); G.gg = ctx.createGain(); G.gsrc.connect(G.gg); G.gg.connect(G.pre);
+    let node = G.pre;
     for (const f of G.filters) { node.connect(f); node = f; }
     node.connect(G.dry); node.connect(G.conv); G.conv.connect(G.wet);
     let sink = ctx.destination;
@@ -879,6 +882,7 @@ function unlock() {
   buildGraph();
   if (G.ctx && G.ctx.state !== 'running') G.ctx.resume().catch(() => {});
   if (G.outEl) G.outEl.play().catch(() => {});
+  if (G.ghost) { G.ghost.src = SILENT; G.ghost.play().then(() => G.ghost.pause()).catch(() => {}); }
   if (!real()) {
     audio.src = SILENT; audio.volume = 1;
     const p = audio.play(); if (p) p.then(() => { if (audio.src === SILENT) audio.pause(); }).catch(() => {});
@@ -888,7 +892,7 @@ function unlock() {
 
 function play(ids, i = 0, o = {}) {
   if (!ids.length) return;
-  S.orig = ids.slice(); S.ctxTitle = o.ctx || ''; S.shuffle = !!o.shuffled; S.fails = 0;
+  killGhost(); S.orig = ids.slice(); S.ctxTitle = o.ctx || ''; S.shuffle = !!o.shuffled; S.fails = 0;
   if (S.shuffle) { const rest = ids.slice(); const first = rest.splice(i, 1)[0]; shuffleArr(rest); S.queue = [first, ...rest]; S.idx = 0; }
   else { S.queue = ids.slice(); S.idx = i; }
   loadCurrent(true);
@@ -910,24 +914,33 @@ async function loadCurrent(autoplay) {
   S.fails = 0;
   if (curURL) URL.revokeObjectURL(curURL);
   curURL = URL.createObjectURL(blob);
+  const fin = S.fadeIn; S.fadeIn = 0;
+  if (fin && G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
+  else if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; }
   audio.src = curURL; applyAudio(false); audio.load();
   t.playCount++; t.last = Date.now(); saveTrack(t);
   S.dur = t.dur || 0;
   mediaMeta(); renderMini(); npTrack(); mark();
   if (autoplay) {
-    try { if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume(); await audio.play(); }
+    try {
+      if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume(); await audio.play();
+      if (fin && G.ready) { const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.sin(i / (N - 1) * Math.PI / 2); G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueCurveAtTime(c, n, Math.max(0.2, fin)); }
+    }
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-function togglePlay() { if (!cur()) return; if (audio.paused) { S.wantPlay = true; if (!real()) loadCurrent(true); else audio.play().catch(() => {}); } else { S.wantPlay = false; audio.pause(); } }
+function killGhost() { xf = false; S.fadeIn = 0; if (G.ghost) { try { G.ghost.pause(); } catch {} } if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
+function togglePlay() { if (!cur()) return; if (audio.paused) { S.wantPlay = true; if (!real()) loadCurrent(true); else audio.play().catch(() => {}); } else { S.wantPlay = false; killGhost(); audio.pause(); } }
+let xf = false;
 function next() {
+  killGhost();
   if (!S.queue.length) return;
   if (S.idx + 1 < S.queue.length) { S.idx++; loadCurrent(true); }
   else if (S.repeat === 1) { S.idx = 0; loadCurrent(true); }
   else { S.wantPlay = false; audio.pause(); audio.currentTime = 0; S.playing = false; onState(); onTime(); }
 }
 function prev() {
-  if (!S.queue.length) return;
+  if (!S.queue.length) return; killGhost();
   if (audio.currentTime > 3 || S.idx === 0) audio.currentTime = 0; else { S.idx--; loadCurrent(true); }
 }
 function seek(t) { audio.currentTime = Math.max(0, Math.min(t, audio.duration || S.dur || t)); onTime(); }
@@ -939,7 +952,7 @@ let sleepT = null;
 function clearSleep() { clearTimeout(sleepT); S.sleep = { at: 0, eot: false }; npSleep(); }
 function startSleep(min) { clearTimeout(sleepT); S.sleep = { at: Date.now() + min * 60000, eot: false }; sleepT = setTimeout(checkSleep, min * 60000 + 300); npSleep(); toast('La música se detendrá en ' + min + ' min'); }
 function sleepEndOfTrack() { clearTimeout(sleepT); S.sleep = { at: 0, eot: true }; npSleep(); toast('Se detendrá al terminar esta canción'); }
-function checkSleep() { if (S.sleep.at && Date.now() >= S.sleep.at) { clearSleep(); S.wantPlay = false; audio.pause(); toast('Temporizador: música detenida'); } }
+function checkSleep() { if (S.sleep.at && Date.now() >= S.sleep.at) { clearSleep(); S.wantPlay = false; killGhost(); audio.pause(); toast('Temporizador: música detenida'); } }
 function openSleep() {
   openSheet('Temporizador', (b, close) => {
     [15, 30, 45, 60, 90].forEach((m) => b.append(action('moon', m + ' minutos', () => { close(); startSleep(m); })));
@@ -991,9 +1004,38 @@ if ('mediaSession' in navigator) {
   set('seekbackward', (d) => seek(audio.currentTime - (d.seekOffset || 10)));
   set('seekforward', (d) => seek(audio.currentTime + (d.seekOffset || 10)));
 }
+function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
+function maybeCrossfade() {
+  const x = +S.audio.xfade || 0;
+  if (!x || xf || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
+  const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
+  const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
+  if (rem <= x && rem > 0.3) startCrossfade(rem);
+}
+async function startCrossfade(rem) {
+  xf = true; const t = cur(), my = S.loadSeq;
+  let blob = null; try { blob = await dbGet('files', t.id); } catch {}
+  if (!blob || my !== S.loadSeq || !S.playing) { xf = false; return; }
+  const gh = G.ghost; if (G.gURL) URL.revokeObjectURL(G.gURL); G.gURL = URL.createObjectURL(blob);
+  gh.src = G.gURL; gh.playbackRate = audio.playbackRate; gh.preservesPitch = S.audio.keepPitch;
+  try {
+    await new Promise((res, rej) => { gh.onloadedmetadata = res; gh.onerror = rej; gh.load(); });
+    gh.currentTime = Math.min(audio.currentTime + 0.12, (gh.duration || 1e9) - 0.1);
+    await gh.play();
+  } catch (e) { console.warn('xfade', e); xf = false; return; }
+  if (my !== S.loadSeq || !S.playing) { gh.pause(); xf = false; return; }
+  const left = Math.max(0.5, ((gh.duration || audio.duration) - gh.currentTime) / (gh.playbackRate || 1));
+  const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
+  G.gg.gain.cancelScheduledValues(n); G.gg.gain.setValueCurveAtTime(c, n, left);
+  setTimeout(() => { if (gh.src === G.gURL) gh.pause(); }, left * 1000 + 250);
+  S.fadeIn = left;
+  if (S.idx + 1 < S.queue.length) S.idx++; else S.idx = 0;
+  loadCurrent(true);
+  setTimeout(() => { xf = false; }, 1500);
+}
 let lastPos = 0;
 function onTime() {
-  checkSleep();
+  checkSleep(); maybeCrossfade();
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur;
   const f = d ? Math.min(1, audio.currentTime / d) : 0;
   const bar = $('#mini .pbar>div'); if (bar) bar.style.width = f * 100 + '%';
@@ -1582,6 +1624,8 @@ function openEQ() {
         sl('Velocidad', 0.5, 2, 0.05, a.rate, (x) => x.toFixed(2) + '×', (x) => { a.rate = x; }),
         h('div', { class: 'row', style: { margin: '-6px 0 14px' } }, h('div', { class: 'grow note' }, 'Mantener el tono al cambiar la velocidad'), toggleEl(() => a.keepPitch, (x) => { a.keepPitch = x; applyAudio(); })),
         sl('Balance izquierda / derecha', -1, 1, 0.05, a.bal, (x) => Math.abs(x) < 0.03 ? 'Centro' : x < 0 ? 'Izq. ' + Math.round(-x * 100) + ' %' : 'Der. ' + Math.round(x * 100) + ' %', (x) => { a.bal = x; }),
+        sl('Fundido cruzado entre canciones', 0, 12, 1, a.xfade || 0, (x) => x ? Math.round(x) + ' s' : 'Apagado', (x) => { a.xfade = x; }),
+        h('div', { class: 'note', style: { margin: '-8px 0 14px' } }, 'Solo funciona con el modo de audio Ecualizador o Experimental, y en reproducción continua.'),
         sl('Reverberación', 0, 100, 1, a.rev, (x) => Math.round(x) + ' %', (x) => { a.rev = x; }),
         h('div', { class: 'row', style: { marginBottom: '8px' } }, h('div', { class: 'grow' }, 'Ambiente'), h('select', { onchange: (e) => { a.room = +e.target.value; applyAudio(); } }, ROOMS.map((r, i) => h('option', { value: i, selected: a.room === i }, r[0])))));
       b.append(h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Mis perfiles de audio'),
