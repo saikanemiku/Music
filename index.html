@@ -1024,6 +1024,22 @@ async function loadCurrent(autoplay) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
+const APP_VER = 'v13';
+function fadeWhy() {
+  const x = +S.audio.xfade || 0, d = audio.duration;
+  if (!x) return 'fundido apagado (pon segundos arriba)';
+  if (!G.ready) return 'el motor de audio no está activo (modo ' + LOADED_ENGINE + ')';
+  if (!S.playing) return 'no está sonando';
+  if (S.repeat === 2) return 'repetir una canción activado';
+  if (S.sleep.eot) return 'temporizador “al terminar”';
+  if (!hasNext()) return 'no hay otra canción después en la cola';
+  if (S.seeking) return 'moviendo la posición';
+  if (!d || !isFinite(d)) return 'duración desconocida';
+  if (d < x * 2 + 2) return 'la canción es muy corta para ' + x + ' s';
+  const rem = (d - audio.currentTime) / (audio.playbackRate || 1), h2 = Math.max(1, x / 2);
+  return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
+}
+setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + APP_VER; }, 500);
 let rampTok = 0;
 // fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
 function rampFade(from, to, secs, shape) {
@@ -1887,6 +1903,8 @@ function openEQ() {
         h('div', { class: 'row', style: { margin: '-6px 0 14px' } }, h('div', { class: 'grow note' }, 'Mantener el tono al cambiar la velocidad'), toggleEl(() => a.keepPitch, (x) => { a.keepPitch = x; applyAudio(); })),
         sl('Balance izquierda / derecha', -1, 1, 0.05, a.bal, (x) => Math.abs(x) < 0.03 ? 'Centro' : x < 0 ? 'Izq. ' + Math.round(-x * 100) + ' %' : 'Der. ' + Math.round(x * 100) + ' %', (x) => { a.bal = x; }),
         sl('Fundido cruzado entre canciones', 0, 12, 1, a.xfade || 0, (x) => x ? Math.round(x) + ' s' : 'Apagado', (x) => { a.xfade = x; }),
+        h('div', { class: 'note', id: 'fwhy', style: { margin: '-6px 0 8px' } }, 'Estado: ' + fadeWhy()),
+        h('button', { class: 'btn sm', style: { marginBottom: '12px' }, onclick: () => { if (!G.ready) { toast('El motor de audio no está activo: ' + LOADED_ENGINE); return; } rampFade(1, 0, 1.5, 'out'); setTimeout(() => rampFade(0, 1, 1.5, 'in'), 1700); toast('Prueba: el volumen baja y vuelve a subir'); } }, 'Probar fundido ahora'),
         (S.engine === 'basic' || S.engine !== LOADED_ENGINE) ? h('div', { class: 'box', style: { margin: '-6px 0 14px' } }, h('div', { class: 'note' }, 'Con el modo Estable el iPhone no deja bajar el volumen, por eso el fundido no suena. Cambia al modo Ecualizador completo (la música puede cortarse con la pantalla bloqueada; si pasa, vuelves a Estable).'), h('div', { style: { marginTop: '10px' } }, h('button', { class: 'btn sm', onclick: () => { S.engine = 'adv'; ls.set('mp.engine', 'adv'); location.reload(); } }, 'Activar Ecualizador y reiniciar'))) : h('div', { class: 'note', style: { margin: '-6px 0 14px' } }, 'La canción baja de volumen al final y la siguiente entra subiendo. Funciona en reproducción continua.'),
         sl('Reverberación', 0, 100, 1, a.rev, (x) => Math.round(x) + ' %', (x) => { a.rev = x; }),
         h('div', { class: 'row', style: { marginBottom: '8px' } }, h('div', { class: 'grow' }, 'Ambiente'), h('select', { onchange: (e) => { a.room = +e.target.value; applyAudio(); } }, ROOMS.map((r, i) => h('option', { value: i, selected: a.room === i }, r[0])))));
