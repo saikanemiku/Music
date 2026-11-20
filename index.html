@@ -1009,7 +1009,8 @@ async function loadCurrent(autoplay) {
   if (curURL) URL.revokeObjectURL(curURL);
   curURL = URL.createObjectURL(blob);
   S.holdUntil = 0; const fin = S.fadeIn || S.dipIn || 0; S.fadeIn = 0; S.dipIn = 0; S.dipping = false;
-  if (fin && G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
+  rampTok++;
+  if (fin && G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; }
   else if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; }
   audio.src = curURL; applyAudio(false); audio.load();
   t.playCount++; t.last = Date.now(); saveTrack(t);
@@ -1018,12 +1019,26 @@ async function loadCurrent(autoplay) {
   if (autoplay) {
     try {
       if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume(); await audio.play();
-      if (fin && G.ready) { const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.sin(i / (N - 1) * Math.PI / 2); G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueCurveAtTime(c, n, Math.max(0.2, fin)); }
+      if (fin && G.ready) rampFade(0, 1, Math.max(0.2, fin), 'in');
     }
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-function killGhost() { clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
+let rampTok = 0;
+// fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
+function rampFade(from, to, secs, shape) {
+  const my = ++rampTok, t0 = performance.now(), ms = Math.max(0.2, secs) * 1000;
+  try { G.fade.gain.cancelScheduledValues(0); } catch {}
+  const step = () => {
+    if (my !== rampTok || !G.ready) return;
+    const f = Math.min(1, (performance.now() - t0) / ms);
+    const k = shape === 'in' ? Math.sin(f * Math.PI / 2) : Math.cos(f * Math.PI / 2);
+    try { G.fade.gain.value = shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
+    if (f < 1) setTimeout(step, 40);
+  };
+  step();
+}
+function killGhost() { rampTok++; clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 let pauseTok = 0;
 async function softPlay(hold = 0) {
   if (!cur()) return; S.wantPlay = true; pauseTok++;
@@ -1185,8 +1200,7 @@ function maybeCrossfade() {
 function dipOut(rem, inSecs) {
   clearTimeout(S.discT); S.discT = setTimeout(npDiscOut, Math.max(0, (rem - 1.9) * 1000));
   S.dipping = true; S.dipIn = Math.max(1, inSecs);
-  const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
-  G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueCurveAtTime(c, n, Math.max(0.3, rem - 0.05));
+  rampFade(1, 0, Math.max(0.3, rem - 0.05), 'out');
 }
 let lastPos = 0;
 function onTime() {
