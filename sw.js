@@ -1,5 +1,5 @@
 // Service worker: guarda la app en el teléfono para que abra sin conexión.
-const CACHE = 'miplayer-v1';
+const CACHE = 'miplayer-v2';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
