@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -20,7 +20,7 @@
   --sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+html,body{touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
 input,select{font:inherit;color:var(--text)}
 #app{position:fixed;inset:0}
@@ -1050,7 +1050,7 @@ function softPause() {
 function togglePlay() { if (!cur()) return; if (audio.paused) softPlay(); else softPause(); }
 let xf = false;
 function next(auto) {
-  if (!(auto && S.dipIn)) killGhost();
+  if (!(auto && S.dipIn)) { S.changing = !!auto; killGhost(); S.changing = false; }
   if (!S.queue.length) return;
   if (S.idx + 1 < S.queue.length) { S.idx++; loadCurrent(true); }
   else if (S.repeat === 1) { S.idx = 0; loadCurrent(true); }
@@ -1162,6 +1162,13 @@ if ('mediaSession' in navigator) {
   // sin estos dos, iOS muestra los botones de canción anterior / siguiente en la pantalla de bloqueo
   set('seekbackward', null); set('seekforward', null);
 }
+function maybeDiscOut() {
+  if (!NP || !NP.disc || NP.swapping || !S.playing || S.seeking || S.repeat === 2 || !hasNext()) return;
+  const d = audio.duration; if (!d || !isFinite(d) || d < 6) return;
+  const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
+  const lead = Math.max(2.4, Math.min(8, (+S.audio.xfade || 0) / 2 + 1));
+  if (rem <= lead && rem > 0.4) npDiscOut();
+}
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
@@ -1211,7 +1218,7 @@ async function startCrossfade(rem) {
 }
 let lastPos = 0;
 function onTime() {
-  checkSleep(); maybeCrossfade();
+  checkSleep(); maybeDiscOut(); maybeCrossfade();
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur;
   const f = d ? Math.min(1, curT() / d) : 0;
   const bar = $('#mini .pbar>div'); if (bar) bar.style.width = f * 100 + '%';
@@ -2031,12 +2038,16 @@ function npTrack() {
   ensureCol(t);
   NP.el.style.setProperty('--tint', tint(t, true, 30));
   if (S.theme.vinyl) {
-    const swapIn = NP.hadVinyl && NP.lastId && NP.lastId !== t.id;
+    const swapIn = NP.hadVinyl && NP.lastId && NP.lastId !== t.id; const oldDisc = NP.disc;
     const v = vinylEl(t); NP.cover.replaceChildren(v.el); NP.vw = v.el; NP.rec = v.rec; NP.arm = v.arm; NP.disc = v.disc; NP.raf = 0; NP.swapping = false; NP.armAng = null;
     NP.hadVinyl = true; NP.lastId = t.id;
     v.rec.style.transform = `rotate(${(NP.ang || 0).toFixed(2)}deg)`;
     v.arm.style.transform = `rotate(${armDeg(VG.REST).toFixed(2)}deg)`;
     vinylSeek();
+    if (swapIn && oldDisc && oldDisc.isConnected === false) {
+      v.el.insertBefore(oldDisc, v.el.firstChild); const od = oldDisc;
+      requestAnimationFrame(() => requestAnimationFrame(() => od.classList.add('out'))); setTimeout(() => od.remove(), 1300);
+    }
     if (swapIn) { v.disc.classList.add('pre'); requestAnimationFrame(() => requestAnimationFrame(() => { v.disc.classList.remove('pre'); })); setTimeout(() => { if (NP && NP.arm === v.arm) npArm(); }, 800); }
     else requestAnimationFrame(() => requestAnimationFrame(npArm));
   }
