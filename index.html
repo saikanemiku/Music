@@ -252,6 +252,20 @@ h2{font-size:21px;font-weight:800;letter-spacing:-.3px}
 .np .cover .art{box-shadow:0 18px 44px rgba(0,0,0,.5),0 0 60px -10px var(--tint,transparent)}
 .field{display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--surface);border-bottom:1px solid rgba(128,128,128,.15)}
 .field label{font-size:13px;color:var(--sec)}
+.vwrap{position:relative;width:min(100%,46vh);aspect-ratio:1}
+.rec{position:absolute;left:3%;top:13%;width:86%;aspect-ratio:1;border-radius:50%;background:repeating-radial-gradient(circle at 50% 50%,#101010 0 2px,#1c1c1c 2px 3px);box-shadow:0 16px 40px rgba(0,0,0,.55),0 0 0 2px #0a0a0a;animation:vspin 6s linear infinite;animation-play-state:paused}
+.rec.on{animation-play-state:running}
+.rec::after{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 20deg,transparent 0 18%,rgba(255,255,255,.13) 25%,transparent 32% 68%,rgba(255,255,255,.13) 75%,transparent 82%)}
+.rec .lab{position:absolute;inset:34%;border-radius:50%;background-size:cover;background-position:center;z-index:1;box-shadow:0 0 0 3px rgba(0,0,0,.35)}
+.rec .lab::after{content:"";position:absolute;left:50%;top:50%;width:14%;aspect-ratio:1;margin:-7% 0 0 -7%;border-radius:50%;background:#111;box-shadow:inset 0 0 0 2px #333}
+@keyframes vspin{to{transform:rotate(360deg)}}
+.arm{position:absolute;inset:0;transform-origin:88% 10%;transition:transform .9s cubic-bezier(.4,0,.2,1);z-index:2;pointer-events:none}
+.arm .bar{position:absolute;left:calc(88% - 2px);top:10%;width:4px;height:66%;background:linear-gradient(90deg,#e8e8e8,#8d8d8d);border-radius:2px;box-shadow:2px 3px 6px rgba(0,0,0,.45)}
+.arm .cw{position:absolute;left:calc(88% - 7px);top:2%;width:14px;height:9%;background:linear-gradient(90deg,#bbb,#666);border-radius:3px}
+.arm .hd{position:absolute;left:calc(88% - 7px);top:73%;width:14px;height:5.5%;background:#d4d4d4;border-radius:2px;box-shadow:1px 2px 4px rgba(0,0,0,.5)}
+.hub{position:absolute;left:calc(88% - 13px);top:calc(10% - 13px);width:26px;height:26px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#eee,#777);box-shadow:0 3px 8px rgba(0,0,0,.5);z-index:3}
+@media (prefers-reduced-motion:reduce){.rec{animation-duration:20s}}
+
 .opt .note{display:block;margin-top:2px}
 #view{isolation:isolate}
 .field input{width:100%}
@@ -630,6 +644,57 @@ async function ensureCol(t) {
   const c = await dominantColor(t.art);
   if (c) { t.col = c; saveTrack(t); if (cur() && cur().id === t.id) { renderMini(); npTrack(); } }
 }
+function smartSquare(bmp, out = 420) {
+  const W = bmp.width, H = bmp.height, sc = Math.min(1, 96 / Math.max(W, H));
+  const w = Math.max(8, Math.round(W * sc)), hh = Math.max(8, Math.round(H * sc));
+  const sm = document.createElement('canvas'); sm.width = w; sm.height = hh;
+  const sx = sm.getContext('2d', { willReadFrequently: true }); sx.drawImage(bmp, 0, 0, w, hh);
+  const d = sx.getImageData(0, 0, w, hh).data;
+  const P = (x, y) => (y * w + x) * 4;
+  const corners = [P(0, 0), P(w - 1, 0), P(0, hh - 1), P(w - 1, hh - 1)];
+  const bg = [0, 1, 2].map((k) => corners.reduce((a, i) => a + d[i + k], 0) / 4);
+  const cornersAgree = corners.every((i) => Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2])) < 40);
+  const nonBg = (x, y) => { const i = P(x, y); return Math.max(Math.abs(d[i] - bg[0]), Math.abs(d[i + 1] - bg[1]), Math.abs(d[i + 2] - bg[2])) > 30; };
+  let l = 0, t = 0, r = w - 1, b = hh - 1;
+  if (cornersAgree) {
+    const row = (y) => { let n = 0; for (let x = 0; x < w; x++) if (nonBg(x, y)) n++; return n / w; };
+    const col = (x) => { let n = 0; for (let y = 0; y < hh; y++) if (nonBg(x, y)) n++; return n / hh; };
+    while (t < hh - 2 && row(t) < 0.03) t++; while (b > t + 1 && row(b) < 0.03) b--;
+    while (l < w - 2 && col(l) < 0.03) l++; while (r > l + 1 && col(r) < 0.03) r--;
+    if (r - l < w * 0.4 || b - t < hh * 0.4) { l = 0; t = 0; r = w - 1; b = hh - 1; }
+  }
+  const bw = r - l + 1, bh = b - t + 1, side = Math.min(bw, bh);
+  // centro de interés: dónde hay más detalle y color
+  const lum = (x, y) => { const i = P(x, y); return 0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]; };
+  let sw = 0, cx = 0, cy = 0;
+  for (let y = t; y < b; y++) for (let x = l; x < r; x++) {
+    const i = P(x, y), mx = Math.max(d[i], d[i + 1], d[i + 2]), mn = Math.min(d[i], d[i + 1], d[i + 2]);
+    const wgt = Math.abs(lum(x, y) - lum(x + 1, y)) + Math.abs(lum(x, y) - lum(x, y + 1)) + (mx - mn) * 0.25 + 1;
+    sw += wgt; cx += wgt * x; cy += wgt * y;
+  }
+  cx = cx / sw; cy = cy / sw;
+  let x0 = l, y0 = t;
+  if (bw > bh) { const mid = (l + r) / 2, c = mid * 0.35 + cx * 0.65; x0 = Math.max(l, Math.min(r + 1 - side, c - side / 2)); }
+  else if (bh > bw) { const mid = (t + b) / 2, c = mid * 0.35 + cy * 0.65; y0 = Math.max(t, Math.min(b + 1 - side, c - side / 2)); }
+  const k = 1 / sc, c = document.createElement('canvas'); c.width = c.height = Math.min(out, Math.round(side * k));
+  c.getContext('2d').drawImage(bmp, x0 * k, y0 * k, side * k, side * k, 0, 0, c.width, c.height);
+  return c;
+}
+const toJpeg = (c, q = 0.86) => new Promise((r) => c.toBlob(r, 'image/jpeg', q));
+async function recenterAll() {
+  const list = S.tracks.filter((t) => t.art && !t.cen);
+  if (!list.length) return toast('Todas las portadas ya están centradas');
+  if (!(await askConfirm('Centrar portadas', `Se recortarán y centrarán ${list.length} portadas. No se puede deshacer.`, 'Centrar'))) return;
+  let n = 0;
+  for (const t of list) {
+    try {
+      const bmp = await createImageBitmap(t.art); const blob = await toJpeg(smartSquare(bmp));
+      if (blob) { t.art = blob; t.cen = 1; t.col = null; const u = artCache.get(t.id); if (u) { URL.revokeObjectURL(u); artCache.delete(t.id); } colBusy.delete(t.id); await saveTrack(t); n++; }
+    } catch (e) { console.warn('recenter', e); }
+    if (n % 5 === 0) toast(`Centrando portadas… ${n}/${list.length}`, true);
+  }
+  toast(`Listo: ${n} portadas centradas`); render(true); renderMini(); npTrack();
+}
 async function makeArt(pic) {
   if (!pic || !pic.data || !pic.data.length) return null;
   try {
@@ -637,6 +702,7 @@ async function makeArt(pic) {
     let bmp;
     try { bmp = await createImageBitmap(blob); }
     catch { bmp = await new Promise((res, rej) => { const i = new Image(); const u = URL.createObjectURL(blob); i.onload = () => { URL.revokeObjectURL(u); res(i); }; i.onerror = rej; i.src = u; }); }
+    if (S.theme.smartArt !== false) { try { const sq = await toJpeg(smartSquare(bmp)); if (sq) { sq.cen = 1; return sq; } } catch (e) { console.warn('smart', e); } }
     const max = 420, sc = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const w = Math.max(1, Math.round(bmp.width * sc)), hh = Math.max(1, Math.round(bmp.height * sc));
     const c = document.createElement('canvas'); c.width = w; c.height = hh;
@@ -671,14 +737,14 @@ async function importFiles(list) {
       const ext = (f.name.split('.').pop() || '').toLowerCase();
       const tags = await readTags(f);
       const dur = await getDuration(f);
-      const art = await makeArt(tags.picture);
+      const art = await makeArt(tags.picture); const cen = !!(art && art.cen);
       const col = art ? await dominantColor(art) : null;
       const base = f.name.replace(/\.[^.]+$/, '');
       const t = {
         id: uid(), key, name: f.name, size: f.size,
         title: tags.title || base, artist: tags.artist || tags.albumArtist || 'Artista desconocido',
         album: tags.album || 'Álbum desconocido', no: tags.no || 0, dur, art: art || null, col,
-        addedAt: Date.now() + i, playCount: 0, last: 0, fav: false
+        addedAt: Date.now() + i, playCount: 0, last: 0, fav: false, cen: cen ? 1 : 0
       };
       await dbPut('files', new Blob([f], { type: f.type || MIME[ext] || 'audio/mpeg' }), t.id);
       await dbPut('tracks', t);
@@ -1001,8 +1067,8 @@ if ('mediaSession' in navigator) {
   set('pause', () => { S.wantPlay = false; audio.pause(); });
   set('previoustrack', prev); set('nexttrack', next);
   set('seekto', (d) => { if (d.seekTime != null) seek(d.seekTime); });
-  set('seekbackward', (d) => seek(audio.currentTime - (d.seekOffset || 10)));
-  set('seekforward', (d) => seek(audio.currentTime + (d.seekOffset || 10)));
+  // sin estos dos, iOS muestra los botones de canción anterior / siguiente en la pantalla de bloqueo
+  set('seekbackward', null); set('seekforward', null);
 }
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
@@ -1534,6 +1600,9 @@ function renderSettings(v) {
   g.append(setRow('Tipografía', sel),
     setRow('Filas compactas', toggleEl(() => T.compact, (x) => upd(() => { T.compact = x; }))),
     setRow('Artistas con portada circular', toggleEl(() => T.circle, (x) => upd(() => { T.circle = x; }))),
+    setRow('Disco de vinilo al reproducir', toggleEl(() => !!T.vinyl, (x) => { upd(() => { T.vinyl = x; }); npTrack(); npState(); }), 'La portada gira como un disco y la aguja avanza hacia el centro'),
+    setRow('Centrar portadas al importar', toggleEl(() => T.smartArt !== false, (x) => upd(() => { T.smartArt = x; })), 'Quita bordes y recorta en cuadrado centrando lo importante'),
+    h('button', { class: 'setrow', style: { width: '100%' }, onclick: recenterAll }, h('span', {}, 'Centrar portadas de mi biblioteca'), h('span', { html: ic('album', 20) })),
     h('button', { class: 'setrow', style: { width: '100%', color: '#ff5a5f' }, onclick: () => { S.theme = Object.assign({}, THEME_DEFAULT, { name: T.name }); saveTheme(); applyTheme(); render(true); renderMini(); } }, 'Restablecer apariencia'));
   v.append(g);
   v.append(h('div', { class: 'grp-t' }, 'Pantalla de inicio'));
@@ -1642,6 +1711,24 @@ function openEQ() {
 
 /* ===================== Reproducción completa ===================== */
 let NP = null;
+const VG = { P: [0.88, 0.10], C: [0.46, 0.56], L: 0.66 };
+function armDeg(r) {
+  const dx = VG.C[0] - VG.P[0], dy = VG.C[1] - VG.P[1], D = Math.hypot(dx, dy), beta = Math.atan2(dy, dx);
+  const al = Math.acos(Math.max(-1, Math.min(1, (VG.L * VG.L + D * D - r * r) / (2 * VG.L * D))));
+  return (beta - al) * 180 / Math.PI - 90;
+}
+function vinylEl(t) {
+  const u = artURL(t);
+  const lab = h('div', { class: 'lab', style: u ? { backgroundImage: `url("${u}")` } : { background: tint(t, true, 40) } });
+  const rec = h('div', { class: 'rec' }, lab), arm = h('div', { class: 'arm' }, h('i', { class: 'cw' }), h('i', { class: 'bar' }), h('i', { class: 'hd' }));
+  return { el: h('div', { class: 'vwrap' }, rec, arm, h('i', { class: 'hub' })), rec, arm };
+}
+function npArm() {
+  if (!NP || !NP.arm) return;
+  const on = S.playing, f = Math.max(0, Math.min(1, NP.f || 0));
+  NP.rec.classList.toggle('on', on);
+  NP.arm.style.transform = `rotate(${armDeg(on ? 0.40 - f * 0.21 : 0.52).toFixed(2)}deg)`;
+}
 function openNow() {
   if (NP || !cur()) return;
   const layer = $('#layer');
@@ -1682,7 +1769,8 @@ function npTrack() {
   if (!NP) return; const t = cur(); if (!t) return npClose();
   ensureCol(t);
   NP.el.style.setProperty('--tint', tint(t, true, 30));
-  NP.cover.replaceChildren(artEl(t)); NP.cover.firstChild.classList.toggle('paused', !S.playing);
+  if (S.theme.vinyl) { const v = vinylEl(t); NP.cover.replaceChildren(v.el); NP.rec = v.rec; NP.arm = v.arm; npArm(); }
+  else { NP.rec = NP.arm = null; NP.cover.replaceChildren(artEl(t)); NP.cover.firstChild.classList.toggle('paused', !S.playing); }
   NP.title.textContent = t.title; NP.artist.textContent = t.artist; NP.ctxl.textContent = S.ctxTitle || t.album;
   NP.favb.className = 'ib' + (t.fav ? ' on' : ''); NP.favb.innerHTML = ic(t.fav ? 'heartf' : 'heart', 26); NP.favb.onclick = () => toggleFav(t);
 }
@@ -1691,13 +1779,15 @@ function npState() {
   NP.playb.innerHTML = ic(S.playing ? 'pause' : 'play', 34); NP.playb.onclick = togglePlay;
   NP.shufb.innerHTML = ic('shuffle', 24); NP.shufb.className = 'ib' + (S.shuffle ? ' on' : ''); NP.shufb.onclick = toggleShuffle;
   NP.repb.innerHTML = ic(S.repeat === 2 ? 'repeat1' : 'repeat', 24); NP.repb.className = 'ib' + (S.repeat ? ' on' : ''); NP.repb.onclick = cycleRepeat;
-  const a = NP.cover.firstChild; if (a) a.classList.toggle('paused', !S.playing);
+  const a = NP.cover.firstChild; if (a && !NP.arm) a.classList.toggle('paused', !S.playing);
+  npArm();
 }
 let npSleepTick = 0;
 function npTime(d) {
   if (!NP) return;
   if (S.sleep.at && Date.now() - npSleepTick > 15000) { npSleepTick = Date.now(); npSleep(); }
   if (NP.dragging) return; d = d || 0;
+  NP.f = d ? audio.currentTime / d : 0; if (NP.arm && S.playing) npArm();
   const t = audio.currentTime || 0;
   NP.seekEl.value = d ? (t / d) * 1000 : 0; NP.seekEl.paint(); NP.tl.textContent = fmt(t); NP.tr.textContent = '-' + fmt(Math.max(0, d - t));
 }
