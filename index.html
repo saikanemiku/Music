@@ -20,7 +20,7 @@
   --sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
+html,body{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;margin:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font);overflow:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%}
 button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
 input,select{font:inherit;color:var(--text)}
 #app{position:fixed;inset:0}
@@ -251,6 +251,7 @@ h2{font-size:21px;font-weight:800;letter-spacing:-.3px}
 .np{background:linear-gradient(180deg,var(--tint,var(--bg)) 0%,var(--bg) 85%)}
 .np .cover .art{box-shadow:0 18px 44px rgba(0,0,0,.5),0 0 60px -10px var(--tint,transparent)}
 .field{display:flex;flex-direction:column;gap:6px;padding:12px 14px;background:var(--surface);border-bottom:1px solid rgba(128,128,128,.15)}
+input,textarea,select{-webkit-user-select:text;user-select:text}
 .field label{font-size:13px;color:var(--sec)}
 .vwrap{position:relative;width:min(100%,46vh);aspect-ratio:1;touch-action:none;user-select:none;-webkit-user-select:none}
 .vwrap::before{content:"";position:absolute;left:-8%;top:3%;width:106%;height:106%;border-radius:50%;background:radial-gradient(circle closest-side,var(--tint,transparent) 0,transparent 78%);opacity:.55;filter:blur(18px);transition:opacity .6s}
@@ -685,24 +686,42 @@ function smartSquare(bmp, out = 420) {
   let x0 = l, y0 = t;
   if (bw > bh) { const mid = (l + r) / 2, c = mid * 0.35 + cx * 0.65; x0 = Math.max(l, Math.min(r + 1 - side, c - side / 2)); }
   else if (bh > bw) { const mid = (t + b) / 2, c = mid * 0.35 + cy * 0.65; y0 = Math.max(t, Math.min(b + 1 - side, c - side / 2)); }
-  const k = 1 / sc, c = document.createElement('canvas'); c.width = c.height = Math.min(out, Math.round(side * k));
-  c.getContext('2d').drawImage(bmp, x0 * k, y0 * k, side * k, side * k, 0, 0, c.width, c.height);
+  if (!isFinite(x0) || !isFinite(y0)) { x0 = l; y0 = t; }
+  const k = 1 / sc, c = document.createElement('canvas'); c.width = c.height = Math.max(8, Math.min(out, Math.round(side * k)));
+  const cx2 = c.getContext('2d'); cx2.fillStyle = '#1c1c1c'; cx2.fillRect(0, 0, c.width, c.height);
+  cx2.drawImage(bmp, Math.max(0, x0 * k), Math.max(0, y0 * k), Math.min(W, side * k), Math.min(H, side * k), 0, 0, c.width, c.height);
   return c;
+}
+function looksBlank(c) {
+  try {
+    const t = document.createElement('canvas'); t.width = t.height = 16; const x = t.getContext('2d', { willReadFrequently: true }); x.drawImage(c, 0, 0, 16, 16);
+    const d = x.getImageData(0, 0, 16, 16).data; let m = 0, v = 0, n = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) m += d[i] + d[i + 1] + d[i + 2]; m /= n * 3;
+    for (let i = 0; i < d.length; i += 4) { const a = (d[i] + d[i + 1] + d[i + 2]) / 3 - m; v += a * a; } v /= n;
+    return v < 4 && (m < 40 || m > 235);
+  } catch { return false; }
 }
 const toJpeg = (c, q = 0.86) => new Promise((r) => c.toBlob(r, 'image/jpeg', q));
 async function recenterAll() {
-  const list = S.tracks.filter((t) => t.art && !t.cen);
-  if (!list.length) return toast('Todas las portadas ya están centradas');
-  if (!(await askConfirm('Centrar portadas', `Se recortarán y centrarán ${list.length} portadas. No se puede deshacer.`, 'Centrar'))) return;
-  let n = 0;
+  const list = S.tracks.slice();
+  if (!list.length) return toast('No hay canciones');
+  if (!(await askConfirm('Recargar portadas', `Se vuelve a leer la portada original de ${list.length} canciones desde sus archivos y se centra. Sirve también para arreglar portadas negras o mal recortadas.`, 'Recargar'))) return;
+  let n = 0, i = 0;
   for (const t of list) {
+    i++;
     try {
-      const bmp = await createImageBitmap(t.art); const blob = await toJpeg(smartSquare(bmp));
-      if (blob) { t.art = blob; t.cen = 1; t.col = null; const u = artCache.get(t.id); if (u) { URL.revokeObjectURL(u); artCache.delete(t.id); } colBusy.delete(t.id); await saveTrack(t); n++; }
+      const blob = await dbGet('files', t.id); if (!blob) continue;
+      const tags = await readTags(new File([blob], t.name || 'x.mp3', { type: blob.type }));
+      const art = await makeArt(tags.picture);
+      if (art) {
+        t.art = art; t.cen = art.cen ? 1 : 0; t.col = null;
+        const u = artCache.get(t.id); if (u) { URL.revokeObjectURL(u); artCache.delete(t.id); } colBusy.delete(t.id);
+        await saveTrack(t); n++;
+      }
     } catch (e) { console.warn('recenter', e); }
-    if (n % 5 === 0) toast(`Centrando portadas… ${n}/${list.length}`, true);
+    if (i % 4 === 0) toast(`Recargando portadas… ${i}/${list.length}`, true);
   }
-  toast(`Listo: ${n} portadas centradas`); render(true); renderMini(); npTrack();
+  toast(`Listo: ${n} portadas recargadas`); render(true); renderMini(); npTrack();
 }
 async function makeArt(pic) {
   if (!pic || !pic.data || !pic.data.length) return null;
@@ -711,11 +730,11 @@ async function makeArt(pic) {
     let bmp;
     try { bmp = await createImageBitmap(blob); }
     catch { bmp = await new Promise((res, rej) => { const i = new Image(); const u = URL.createObjectURL(blob); i.onload = () => { URL.revokeObjectURL(u); res(i); }; i.onerror = rej; i.src = u; }); }
-    if (S.theme.smartArt !== false) { try { const sq = await toJpeg(smartSquare(bmp)); if (sq) { sq.cen = 1; return sq; } } catch (e) { console.warn('smart', e); } }
+    if (S.theme.smartArt !== false) { try { const cv = smartSquare(bmp); if (!looksBlank(cv)) { const sq = await toJpeg(cv); if (sq) { sq.cen = 1; return sq; } } } catch (e) { console.warn('smart', e); } }
     const max = 420, sc = Math.min(1, max / Math.max(bmp.width, bmp.height));
     const w = Math.max(1, Math.round(bmp.width * sc)), hh = Math.max(1, Math.round(bmp.height * sc));
     const c = document.createElement('canvas'); c.width = w; c.height = hh;
-    c.getContext('2d').drawImage(bmp, 0, 0, w, hh);
+    const cx = c.getContext('2d'); cx.fillStyle = '#1c1c1c'; cx.fillRect(0, 0, w, hh); cx.drawImage(bmp, 0, 0, w, hh);
     return await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.86));
   } catch { return null; }
 }
@@ -1721,7 +1740,7 @@ function renderSettings(v) {
     setRow('Artistas con portada circular', toggleEl(() => T.circle, (x) => upd(() => { T.circle = x; }))),
     setRow('Disco de vinilo al reproducir', toggleEl(() => !!T.vinyl, (x) => { upd(() => { T.vinyl = x; }); npTrack(); npState(); }), 'La portada gira como un disco y la aguja avanza hacia el centro'),
     setRow('Centrar portadas al importar', toggleEl(() => T.smartArt !== false, (x) => upd(() => { T.smartArt = x; })), 'Quita bordes y recorta en cuadrado centrando lo importante'),
-    h('button', { class: 'setrow', style: { width: '100%' }, onclick: recenterAll }, h('span', {}, 'Centrar portadas de mi biblioteca'), h('span', { html: ic('album', 20) })),
+    h('button', { class: 'setrow', style: { width: '100%' }, onclick: recenterAll }, h('span', {}, 'Recargar y centrar portadas de mi biblioteca'), h('span', { html: ic('album', 20) })),
     h('button', { class: 'setrow', style: { width: '100%', color: '#ff5a5f' }, onclick: () => { S.theme = Object.assign({}, THEME_DEFAULT, { name: T.name }); saveTheme(); applyTheme(); render(true); renderMini(); } }, 'Restablecer apariencia'));
   v.append(g);
   v.append(h('div', { class: 'grp-t' }, 'Pantalla de inicio'));
