@@ -383,7 +383,7 @@ async function dbClear(s) { const t = db.transaction(s, 'readwrite'); t.objectSt
 
 /* ===================== Estado ===================== */
 const THEME_DEFAULT = { accent: '#1ed760', bg: '#121212', surface: '#262626', text: '#ffffff', sec: '#b3b3b3', radius: 8, font: 'system', name: '', quick: true, recent: true, played: true, most: true, albums: true, artists: true, circle: true, compact: false };
-const AUDIO_DEFAULT = { eq: true, bands: Array(10).fill(0), preset: 'Plano', preamp: 0, headroom: true, rev: 0, room: 3, rate: 1, keepPitch: true, bal: 0, xfade: 0, xmode: 'dip' };
+const AUDIO_DEFAULT = { eq: true, bands: Array(10).fill(0), preset: 'Plano', preamp: 0, headroom: true, rev: 0, room: 3, rate: 1, keepPitch: true, bal: 0, xfade: 0 };
 const THEME_PRESETS = [
   ['Verde clásico', '#1ed760', '#121212', '#262626', '#ffffff', '#b3b3b3'],
   ['OLED negro', '#1ed760', '#000000', '#141414', '#ffffff', '#9a9a9a'],
@@ -941,8 +941,6 @@ function buildGraph() {
     G.conv = ctx.createConvolver(); G.dry = ctx.createGain(); G.wet = ctx.createGain();
     G.pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
     G.fade = ctx.createGain(); G.src.connect(G.fade); G.fade.connect(G.pre);
-    G.ghost = new Audio(); G.ghost.setAttribute('playsinline', ''); G.ghost.preload = 'auto';
-    G.gsrc = ctx.createMediaElementSource(G.ghost); G.gg = ctx.createGain(); G.gsrc.connect(G.gg); G.gg.connect(G.pre);
     let node = G.pre;
     for (const f of G.filters) { node.connect(f); node = f; }
     node.connect(G.dry); node.connect(G.conv); G.conv.connect(G.wet);
@@ -979,7 +977,6 @@ function unlock() {
   buildGraph();
   if (G.ctx && G.ctx.state !== 'running') G.ctx.resume().catch(() => {});
   if (G.outEl) G.outEl.play().catch(() => {});
-  if (G.ghost) { G.ghost.src = SILENT; G.ghost.play().then(() => G.ghost.pause()).catch(() => {}); }
   if (!real()) {
     audio.src = SILENT; audio.volume = 1;
     const p = audio.play(); if (p) p.then(() => { if (audio.src === SILENT) audio.pause(); }).catch(() => {});
@@ -1026,7 +1023,7 @@ async function loadCurrent(autoplay) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-function killGhost() { clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ghost) { try { G.ghost.pause(); } catch {} } if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
+function killGhost() { clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 let pauseTok = 0;
 async function softPlay(hold = 0) {
   if (!cur()) return; S.wantPlay = true; pauseTok++;
@@ -1169,19 +1166,20 @@ function maybeDiscOut() {
   const lead = Math.max(2.4, Math.min(8, (+S.audio.xfade || 0) / 2 + 1));
   if (rem <= lead && rem > 0.4) npDiscOut();
 }
+function discGuard() {
+  if (!NP || !NP.swapping || S.dipping) return;
+  const d = audio.duration; if (!d || !isFinite(d)) return;
+  if ((d - audio.currentTime) > 10 || (S.seeking && (d - curT()) > 4)) npDiscBack();
+}
+setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); } }, 250);
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
   if (!x || xf || S.dipping || S.seeking || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
-  if (S.audio.xmode === 'overlap') {
-    if (rem <= x + 8 && rem > x && G.gFor !== cur().id) prepGhost();
-    if (rem <= x && rem > 0.3) { if (G.gReady && G.gReady === cur().id) startCrossfade(rem); else dipOut(rem, x); }
-  } else {
-    const h2 = Math.max(1, x / 2);
-    if (rem <= h2 && rem > 0.3) dipOut(rem, h2);
-  }
+  const h2 = Math.max(1, x / 2);
+  if (rem <= h2 && rem > 0.25) dipOut(rem, h2);
 }
 // modo suave: baja el volumen al final y la siguiente canción entra subiendo (sin segundo reproductor)
 function dipOut(rem, inSecs) {
@@ -1190,35 +1188,9 @@ function dipOut(rem, inSecs) {
   const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
   G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueCurveAtTime(c, n, Math.max(0.3, rem - 0.05));
 }
-async function prepGhost() {
-  const t = cur(); if (!t) return; G.gFor = t.id; G.gReady = null;
-  let blob = null; try { blob = await dbGet('files', t.id); } catch {}
-  if (!blob || cur().id !== t.id) return;
-  if (G.gURL) URL.revokeObjectURL(G.gURL); G.gURL = URL.createObjectURL(blob);
-  const gh = G.ghost; gh.src = G.gURL; gh.preload = 'auto';
-  try { await new Promise((res, rej) => { gh.onloadedmetadata = res; gh.onerror = rej; gh.load(); }); } catch { return; }
-  if (cur().id === t.id) G.gReady = t.id;
-}
-async function startCrossfade(rem) {
-  xf = true; const my = S.loadSeq, gh = G.ghost;
-  try {
-    gh.playbackRate = audio.playbackRate; gh.preservesPitch = S.audio.keepPitch;
-    gh.currentTime = Math.min(audio.currentTime + 0.2, (gh.duration || 1e9) - 0.1);
-    await gh.play();
-  } catch (e) { console.warn('xfade', e); xf = false; dipOut(Math.max(0.5, audio.duration - audio.currentTime), 3); return; }
-  if (my !== S.loadSeq || !S.playing) { gh.pause(); xf = false; return; }
-  const left = Math.max(0.5, ((gh.duration || audio.duration) - gh.currentTime) / (gh.playbackRate || 1));
-  const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
-  G.gg.gain.cancelScheduledValues(n); G.gg.gain.setValueCurveAtTime(c, n, left);
-  setTimeout(() => { gh.pause(); }, left * 1000 + 250);
-  S.fadeIn = left; G.gReady = null; G.gFor = null; npDiscOut();
-  if (S.idx + 1 < S.queue.length) S.idx++; else S.idx = 0;
-  loadCurrent(true);
-  setTimeout(() => { xf = false; }, 1500);
-}
 let lastPos = 0;
 function onTime() {
-  checkSleep(); maybeDiscOut(); maybeCrossfade();
+  checkSleep(); maybeDiscOut(); maybeCrossfade(); discGuard();
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur;
   const f = d ? Math.min(1, curT() / d) : 0;
   const bar = $('#mini .pbar>div'); if (bar) bar.style.width = f * 100 + '%';
@@ -1901,8 +1873,7 @@ function openEQ() {
         h('div', { class: 'row', style: { margin: '-6px 0 14px' } }, h('div', { class: 'grow note' }, 'Mantener el tono al cambiar la velocidad'), toggleEl(() => a.keepPitch, (x) => { a.keepPitch = x; applyAudio(); })),
         sl('Balance izquierda / derecha', -1, 1, 0.05, a.bal, (x) => Math.abs(x) < 0.03 ? 'Centro' : x < 0 ? 'Izq. ' + Math.round(-x * 100) + ' %' : 'Der. ' + Math.round(x * 100) + ' %', (x) => { a.bal = x; }),
         sl('Fundido cruzado entre canciones', 0, 12, 1, a.xfade || 0, (x) => x ? Math.round(x) + ' s' : 'Apagado', (x) => { a.xfade = x; }),
-        h('div', { class: 'row', style: { margin: '-6px 0 6px' } }, h('div', { class: 'grow note' }, 'Superponer canciones de verdad (experimental; puede cortarse en iPhone)'), toggleEl(() => a.xmode === 'overlap', (x) => { a.xmode = x ? 'overlap' : 'dip'; applyAudio(); })),
-        h('div', { class: 'note', style: { margin: '0 0 14px' } }, 'Por defecto la canción baja de volumen al final y la siguiente entra subiendo. Solo funciona con el modo de audio Ecualizador o Experimental, y en reproducción continua.'),
+        h('div', { class: 'note', style: { margin: '-6px 0 14px' } }, S.engine === 'basic' ? '⚠ Estás en el modo Estable: iPhone no deja bajar el volumen en este modo, así que el fundido no funciona. Cámbialo en Ajustes → Modo de audio a “Ecualizador completo” o “Experimental”.' : 'La canción baja de volumen al final y la siguiente entra subiendo. Funciona en reproducción continua.'),
         sl('Reverberación', 0, 100, 1, a.rev, (x) => Math.round(x) + ' %', (x) => { a.rev = x; }),
         h('div', { class: 'row', style: { marginBottom: '8px' } }, h('div', { class: 'grow' }, 'Ambiente'), h('select', { onchange: (e) => { a.room = +e.target.value; applyAudio(); } }, ROOMS.map((r, i) => h('option', { value: i, selected: a.room === i }, r[0])))));
       b.append(h('div', { class: 'row' }, h('h2', { class: 'grow' }, 'Mis perfiles de audio'),
