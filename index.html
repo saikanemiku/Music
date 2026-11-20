@@ -1025,7 +1025,7 @@ async function loadCurrent(autoplay) {
 }
 function killGhost() { xf = false; S.fadeIn = 0; if (G.ghost) { try { G.ghost.pause(); } catch {} } if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 let pauseTok = 0;
-async function softPlay() {
+async function softPlay(hold = 0) {
   if (!cur()) return; S.wantPlay = true; pauseTok++;
   if (!real()) return loadCurrent(true);
   try {
@@ -1033,7 +1033,7 @@ async function softPlay() {
     if (G.outEl && G.outEl.paused) G.outEl.play().catch(() => {});
     if (G.ready && !xf) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
     await audio.play();
-    if (G.ready && !xf) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n + 0.04); G.fade.gain.linearRampToValueAtTime(1, n + 0.22); }
+    if (G.ready && !xf) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n + 0.04 + hold); G.fade.gain.linearRampToValueAtTime(1, n + 0.22 + hold); }
   } catch (e) { console.warn('softPlay', e); if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 }
 function softPause() {
@@ -1058,23 +1058,43 @@ function prev() {
   if (audio.currentTime > 3 || S.idx === 0) audio.currentTime = 0; else { S.idx--; loadCurrent(true); }
 }
 const curT = () => (S.seeking ? S.seekTo : audio.currentTime) || 0;
-function finishSeek() {
-  if (!S.seeking) return; S.seeking = false; clearTimeout(S.seekT);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// iOS a veces avisa que terminó de saltar antes de tiempo y suena un instante el punto anterior:
+// esperamos a que de verdad esté en el punto elegido, y al reanudar mantenemos el volumen en 0 un momento
+async function finishSeek() {
+  if (!S.seeking || S.finishing) return; S.finishing = true; clearTimeout(S.seekT);
+  const tok = S.seekTok, T = S.seekTo, t0 = Date.now();
+  for (let i = 0; i < 4 && Date.now() - t0 < 6000; i++) {
+    while ((audio.readyState < 3 || audio.seeking) && Date.now() - t0 < 6000) await sleep(60);
+    if (tok !== S.seekTok) { S.finishing = false; return; }
+    if (Math.abs(audio.currentTime - T) < 0.6) break;
+    audio.currentTime = T; await sleep(250);
+  }
+  await sleep(120);
+  if (tok !== S.seekTok) { S.finishing = false; return; }
+  S.seeking = false; S.finishing = false;
   const resume = S.seekResume && S.wantPlay !== false; S.seekResume = false;
-  onTime(); if (resume) softPlay();
+  onTime();
+  if (!resume) return;
+  const tp = Date.now(); await softPlay(0.45);
+  await sleep(300);
+  if (tok !== S.seekTok || S.seeking || audio.paused) return;
+  const want = T + (Date.now() - tp) / 1000;
+  if (Math.abs(audio.currentTime - want) > 1.2) { audio.currentTime = Math.min(want, (audio.duration || want) - 0.1); }
 }
 function seek(t) {
   if (!real()) return;
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur || t;
   t = Math.max(0, Math.min(t, d)); killGhost();
   if (!S.seeking && !audio.paused) S.seekResume = true;
-  S.seeking = true; S.seekTo = t;
+  S.seeking = true; S.seekTo = t; S.seekTok = (S.seekTok || 0) + 1; S.finishing = false;
   if (G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
   if (!audio.paused) audio.pause();
+  if (G.outEl && !G.outEl.paused) G.outEl.pause();
   audio.currentTime = t; onTime();
-  clearTimeout(S.seekT); S.seekT = setTimeout(finishSeek, 4000);
+  clearTimeout(S.seekT); S.seekT = setTimeout(finishSeek, 3500);
 }
-audio.addEventListener('seeked', () => { if (S.seeking && Math.abs(audio.currentTime - S.seekTo) < 1.5) finishSeek(); });
+audio.addEventListener('seeked', () => { if (S.seeking) finishSeek(); });
 function ended() {
   if (S.sleep.eot) { clearSleep(); S.wantPlay = false; S.playing = false; onState(); toast('Temporizador: música detenida'); return; }
   if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else next();
