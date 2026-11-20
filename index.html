@@ -266,6 +266,9 @@ input,textarea,select{-webkit-user-select:text;user-select:text}
 .rec .lab::after{content:"";position:absolute;left:50%;top:50%;width:13%;aspect-ratio:1;margin:-6.5% 0 0 -6.5%;border-radius:50%;background:radial-gradient(circle,#050505 0 45%,#8a8a8a 50%,#2b2b2b 70%)}
 .arm{position:absolute;inset:0;transform-origin:93% 9%;transition:transform 1s cubic-bezier(.45,.05,.2,1);z-index:3;pointer-events:none;filter:drop-shadow(3px 5px 5px rgba(0,0,0,.45))}
 .arm.drag{transition:none}
+.disc{position:absolute;inset:0;transition:transform 1s cubic-bezier(.5,0,.25,1),opacity .9s ease;will-change:transform}
+.disc.out{transform:translate(-118%,-4%) rotate(-14deg);opacity:0}
+.disc.pre{transform:translate(118%,6%) rotate(14deg);opacity:0;transition:none}
 .arm .bar{position:absolute;left:calc(93% - 2.5px);top:9%;width:5px;height:72%;background:linear-gradient(90deg,#f1f1f1,#9a9a9a 55%,#6b6b6b);border-radius:3px}
 .arm .cw{position:absolute;left:calc(93% - 9px);top:-3%;width:18px;height:11%;background:linear-gradient(90deg,#d6d6d6,#6f6f6f);border-radius:4px;box-shadow:inset 0 0 0 1px rgba(0,0,0,.25)}
 .arm .hd{position:absolute;left:calc(93% - 8px);top:76%;width:16px;height:6.5%;background:linear-gradient(180deg,#2a2a2a,#111);border-radius:2px 2px 4px 4px;transform:rotate(-10deg);transform-origin:50% 0;box-shadow:inset 0 0 0 1px rgba(255,255,255,.2)}
@@ -1008,7 +1011,7 @@ async function loadCurrent(autoplay) {
   S.fails = 0;
   if (curURL) URL.revokeObjectURL(curURL);
   curURL = URL.createObjectURL(blob);
-  const fin = S.fadeIn || S.dipIn || 0; S.fadeIn = 0; S.dipIn = 0; S.dipping = false;
+  S.holdUntil = 0; const fin = S.fadeIn || S.dipIn || 0; S.fadeIn = 0; S.dipIn = 0; S.dipping = false;
   if (fin && G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
   else if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; }
   audio.src = curURL; applyAudio(false); audio.load();
@@ -1023,7 +1026,7 @@ async function loadCurrent(autoplay) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-function killGhost() { xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ghost) { try { G.ghost.pause(); } catch {} } if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
+function killGhost() { clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ghost) { try { G.ghost.pause(); } catch {} } if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 let pauseTok = 0;
 async function softPlay(hold = 0) {
   if (!cur()) return; S.wantPlay = true; pauseTok++;
@@ -1057,7 +1060,11 @@ function prev() {
   if (!S.queue.length) return; killGhost();
   if (audio.currentTime > 3 || S.idx === 0) audio.currentTime = 0; else { S.idx--; loadCurrent(true); }
 }
-const curT = () => (S.seeking ? S.seekTo : audio.currentTime) || 0;
+const curT = () => {
+  if (S.seeking) return S.seekTo || 0;
+  if (Date.now() < (S.holdUntil || 0)) return (S.holdT || 0) + (S.playing ? (Date.now() - S.holdFrom) / 1000 : 0);
+  return audio.currentTime || 0;
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // iOS a veces avisa que terminó de saltar antes de tiempo y suena un instante el punto anterior:
 // esperamos a que de verdad esté en el punto elegido, y al reanudar mantenemos el volumen en 0 un momento
@@ -1072,7 +1079,7 @@ async function finishSeek() {
   }
   await sleep(120);
   if (tok !== S.seekTok) { S.finishing = false; return; }
-  S.seeking = false; S.finishing = false;
+  S.seeking = false; S.finishing = false; S.holdT = T; S.holdFrom = Date.now(); S.holdUntil = Date.now() + 1800;
   const resume = S.seekResume && S.wantPlay !== false; S.seekResume = false;
   onTime();
   if (!resume) return;
@@ -1171,6 +1178,7 @@ function maybeCrossfade() {
 }
 // modo suave: baja el volumen al final y la siguiente canción entra subiendo (sin segundo reproductor)
 function dipOut(rem, inSecs) {
+  clearTimeout(S.discT); S.discT = setTimeout(npDiscOut, Math.max(0, (rem - 1.9) * 1000));
   S.dipping = true; S.dipIn = Math.max(1, inSecs);
   const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
   G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueCurveAtTime(c, n, Math.max(0.3, rem - 0.05));
@@ -1196,7 +1204,7 @@ async function startCrossfade(rem) {
   const n = G.ctx.currentTime, N = 40, c = new Float32Array(N); for (let i = 0; i < N; i++) c[i] = Math.cos(i / (N - 1) * Math.PI / 2);
   G.gg.gain.cancelScheduledValues(n); G.gg.gain.setValueCurveAtTime(c, n, left);
   setTimeout(() => { gh.pause(); }, left * 1000 + 250);
-  S.fadeIn = left; G.gReady = null; G.gFor = null;
+  S.fadeIn = left; G.gReady = null; G.gFor = null; npDiscOut();
   if (S.idx + 1 < S.queue.length) S.idx++; else S.idx = 0;
   loadCurrent(true);
   setTimeout(() => { xf = false; }, 1500);
@@ -1914,15 +1922,26 @@ function vinylEl(t) {
   const u = artURL(t);
   const lab = h('div', { class: 'lab', style: u ? { backgroundImage: `url("${u}")` } : { background: tint(t, true, 40) } });
   const rec = h('div', { class: 'rec' }, lab), arm = h('div', { class: 'arm' }, h('i', { class: 'cw' }), h('i', { class: 'bar' }), h('i', { class: 'hd' }));
-  const el = h('div', { class: 'vwrap' }, rec, h('div', { class: 'sheen' }), arm, h('i', { class: 'hub' }));
-  return { el, rec, arm };
+  const disc = h('div', { class: 'disc' }, rec, h('div', { class: 'sheen' }));
+  const el = h('div', { class: 'vwrap' }, disc, arm, h('i', { class: 'hub' }));
+  return { el, rec, arm, disc };
 }
 function npArmSoon() {
   if (!NP || !NP.arm) return; clearTimeout(NP.armT); NP.armHold = true;
   NP.armT = setTimeout(() => { if (NP) { NP.armHold = false; npArm(); } }, 220);
 }
+// animación de cambio de disco: la aguja se levanta, el disco sale y entra el siguiente
+function npDiscOut() {
+  if (!NP || !NP.disc || NP.swapping) return;
+  NP.swapping = true; NP.arm.style.transform = `rotate(${armDeg(VG.REST).toFixed(2)}deg)`;
+  const d = NP.disc; setTimeout(() => { if (NP && NP.swapping && NP.disc === d) d.classList.add('out'); }, 380);
+}
+function npDiscBack() {
+  if (!NP || !NP.swapping) return; NP.swapping = false;
+  if (NP.disc) NP.disc.classList.remove('out'); npArm();
+}
 function npArm() {
-  if (!NP || !NP.arm) return;
+  if (!NP || !NP.arm || NP.swapping) return;
   const on = S.playing, f = Math.max(0, Math.min(1, NP.f || 0));
   NP.vw.classList.toggle('idle', !on);
   if (!NP.vdrag) NP.arm.style.transform = `rotate(${armDeg(on ? VG.R0 - f * (VG.R0 - VG.R1) : VG.REST).toFixed(2)}deg)`;
@@ -1948,14 +1967,24 @@ function vspin() {
 function vinylSeek() {
   const w = NP.vw;
   const frac = (e) => { const b = w.getBoundingClientRect(); const x = (e.clientX - b.left) / b.width, y = (e.clientY - b.top) / b.height; const r = Math.hypot(x - VG.C[0], y - VG.C[1]); return Math.max(0, Math.min(1, (VG.R0 - r) / (VG.R0 - VG.R1))); };
+  const follow = () => {
+    if (NP.afRaf) return;
+    const loop = () => {
+      if (!NP || !NP.arm) return;
+      NP.armAng = NP.armAng == null ? NP.armTarget : NP.armAng + (NP.armTarget - NP.armAng) * 0.35;
+      NP.arm.style.transform = `rotate(${NP.armAng.toFixed(2)}deg)`;
+      NP.afRaf = (NP.vdrag || Math.abs(NP.armTarget - NP.armAng) > 0.05) ? requestAnimationFrame(loop) : 0;
+    };
+    NP.afRaf = requestAnimationFrame(loop);
+  };
   const show = (f) => {
-    NP.f = f; NP.arm.style.transform = `rotate(${armDeg(VG.R0 - f * (VG.R0 - VG.R1)).toFixed(2)}deg)`;
+    NP.f = f; NP.armTarget = armDeg(VG.R0 - f * (VG.R0 - VG.R1)); follow();
     const d = audio.duration || S.dur || 0; NP.seekEl.value = f * 1000; NP.seekEl.paint(); NP.tl.textContent = fmt(f * d); NP.tr.textContent = '-' + fmt(Math.max(0, d - f * d));
   };
-  w.addEventListener('pointerdown', (e) => { NP.vdrag = true; NP.arm.classList.add('drag'); try { w.setPointerCapture(e.pointerId); } catch {} show(frac(e)); });
+  w.addEventListener('pointerdown', (e) => { if (NP.swapping) return; NP.armAng = armDeg(S.playing ? VG.R0 - (NP.f || 0) * (VG.R0 - VG.R1) : VG.REST); NP.vdrag = true; NP.arm.classList.add('drag'); try { w.setPointerCapture(e.pointerId); } catch {} show(frac(e)); });
   w.addEventListener('pointermove', (e) => { if (NP.vdrag) show(frac(e)); });
   const end = (e, ok) => {
-    if (!NP || !NP.vdrag) return; NP.vdrag = false; NP.arm.classList.remove('drag');
+    if (!NP || !NP.vdrag) return; NP.vdrag = false; NP.armAng = null; if (NP.afRaf) { cancelAnimationFrame(NP.afRaf); NP.afRaf = 0; } NP.arm.classList.remove('drag');
     if (ok) { const f = frac(e), d = audio.duration || S.dur || 0; if (d) seek(f * d); }
     npArm();
   };
@@ -2002,10 +2031,14 @@ function npTrack() {
   ensureCol(t);
   NP.el.style.setProperty('--tint', tint(t, true, 30));
   if (S.theme.vinyl) {
-    const v = vinylEl(t); NP.cover.replaceChildren(v.el); NP.vw = v.el; NP.rec = v.rec; NP.arm = v.arm; NP.raf = 0;
+    const swapIn = NP.hadVinyl && NP.lastId && NP.lastId !== t.id;
+    const v = vinylEl(t); NP.cover.replaceChildren(v.el); NP.vw = v.el; NP.rec = v.rec; NP.arm = v.arm; NP.disc = v.disc; NP.raf = 0; NP.swapping = false; NP.armAng = null;
+    NP.hadVinyl = true; NP.lastId = t.id;
     v.rec.style.transform = `rotate(${(NP.ang || 0).toFixed(2)}deg)`;
     v.arm.style.transform = `rotate(${armDeg(VG.REST).toFixed(2)}deg)`;
-    vinylSeek(); requestAnimationFrame(() => requestAnimationFrame(npArm));
+    vinylSeek();
+    if (swapIn) { v.disc.classList.add('pre'); requestAnimationFrame(() => requestAnimationFrame(() => { v.disc.classList.remove('pre'); })); setTimeout(() => { if (NP && NP.arm === v.arm) npArm(); }, 800); }
+    else requestAnimationFrame(() => requestAnimationFrame(npArm));
   }
   else { NP.rec = NP.arm = null; NP.cover.replaceChildren(artEl(t)); NP.cover.firstChild.classList.toggle('paused', !S.playing); }
   NP.title.textContent = t.title; NP.artist.textContent = t.artist; NP.ctxl.textContent = S.ctxTitle || t.album;
