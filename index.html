@@ -1035,7 +1035,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v14';
+const APP_VER = 'v15';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1269,7 +1269,7 @@ function maybeCrossfade() {
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
   if (S.ov) return;
-  if (rem <= x + 25 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
+  if (audio.currentTime > 1.5 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
   if (rem <= x && rem > 0.3 && startOverlap(rem)) return;
   const h2 = Math.max(1, x / 2);
   if (rem <= h2 && rem > 0.25) dipOut(rem, h2);
