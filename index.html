@@ -994,7 +994,7 @@ function play(ids, i = 0, o = {}) {
 const shuffleArr = (a) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 const playTracks = (tracks, i, o) => play(tracks.map((t) => t.id), i, o);
 
-async function loadCurrent(autoplay) {
+async function loadCurrent(autoplay, ov) {
   const t = cur(); if (!t) return;
   const my = ++S.loadSeq;
   let blob = null;
@@ -1010,7 +1010,7 @@ async function loadCurrent(autoplay) {
   curURL = URL.createObjectURL(blob);
   S.holdUntil = 0; const fin = S.fadeIn || S.dipIn || 0; S.fadeIn = 0; S.dipIn = 0; S.dipping = false;
   rampTok++;
-  if (fin && G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; }
+  if ((fin || ov) && G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; }
   else if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; }
   audio.src = curURL; applyAudio(false); audio.load();
   t.playCount++; t.last = Date.now(); saveTrack(t);
@@ -1018,13 +1018,24 @@ async function loadCurrent(autoplay) {
   mediaMeta(); renderMini(); npTrack(); mark();
   if (autoplay) {
     try {
-      if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume(); await audio.play();
+      if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume();
+      if (ov) {
+        await new Promise((r) => { if (audio.readyState >= 1) r(); else audio.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 2500); });
+        const bp = () => (G.ctx.currentTime - ov.t0) * ov.rate;
+        try { audio.currentTime = bp() + OV_LOAD; } catch {}
+        await audio.play();
+        OV_LOAD = Math.max(0.1, Math.min(1.5, OV_LOAD - (audio.currentTime - bp())));
+        rampFade(0, 1, 0.5, 'in'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.5, 'out', () => S.ov === ov);
+        setTimeout(() => killOv(ov), 700);
+        return;
+      }
+      await audio.play();
       if (fin && G.ready) rampFade(0, 1, Math.max(0.2, fin), 'in');
     }
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v13';
+const APP_VER = 'v14';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1040,6 +1051,52 @@ function fadeWhy() {
   return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
 }
 setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + APP_VER; }, 500);
+let OV_LOAD = 0.35;
+function ramp2(param, from, to, secs, shape, alive) {
+  const t0 = performance.now(), ms = Math.max(0.1, secs) * 1000;
+  const step = () => {
+    if (!alive()) return;
+    const f = Math.min(1, (performance.now() - t0) / ms);
+    const k = shape === 'in' ? Math.sin(f * Math.PI / 2) : Math.cos(f * Math.PI / 2);
+    try { param.value = shape === 'in' ? from + (to - from) * k : to + (from - to) * k; } catch {}
+    if (f < 1) setTimeout(step, 40);
+  };
+  step();
+}
+function killOv(ov) {
+  try { ov.src.stop(); } catch {} try { ov.src.disconnect(); ov.gb.disconnect(); } catch {}
+  if (S.ov === ov) S.ov = null;
+}
+const nextIdx = () => S.idx + 1 < S.queue.length ? S.idx + 1 : S.repeat === 1 ? 0 : -1;
+// superposición real: la siguiente canción se decodifica en memoria y suena mezclada con el final de la actual
+async function prepBuf() {
+  const ni = nextIdx(); if (ni < 0 || !G.ctx) return; const id = S.queue[ni];
+  if (G.bufFor === id) return; G.bufFor = id; G.buf = null; G.bufReady = null;
+  try {
+    const blob = await dbGet('files', id); if (!blob || G.bufFor !== id) return;
+    const ab = await blob.arrayBuffer(); if (G.bufFor !== id) return;
+    const buf = await new Promise((res, rej) => { G.ctx.decodeAudioData(ab, res, rej); });
+    if (G.bufFor === id) { G.buf = buf; G.bufReady = id; }
+  } catch (e) { console.warn('prepBuf', e); }
+}
+function startOverlap(rem) {
+  const ni = nextIdx(); if (ni < 0 || G.bufReady !== S.queue[ni]) return false;
+  try {
+    const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = audio.playbackRate || 1;
+    const gb = G.ctx.createGain(); gb.gain.value = 0; src.connect(gb); gb.connect(G.pre);
+    const ov = { src, gb, t0: G.ctx.currentTime, rate: audio.playbackRate || 1, handed: false };
+    S.ov = ov; src.start();
+    rampFade(1, 0, Math.max(0.3, rem - 0.05), 'out');
+    ramp2(gb.gain, 0, 1, Math.max(0.3, rem - 0.05), 'in', () => S.ov === ov && !ov.handed);
+    clearTimeout(S.discT); S.discT = setTimeout(npDiscOut, 0);
+    return true;
+  } catch (e) { console.warn('overlap', e); if (S.ov) killOv(S.ov); return false; }
+}
+function handoff() {
+  const ov = S.ov; if (!ov || ov.handed) return; ov.handed = true;
+  const ni = nextIdx(); if (ni < 0) { killOv(ov); return; }
+  S.idx = ni; S.dipping = false; loadCurrent(true, ov);
+}
 let rampTok = 0;
 // fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
 function rampFade(from, to, secs, shape) {
@@ -1054,7 +1111,7 @@ function rampFade(from, to, secs, shape) {
   };
   step();
 }
-function killGhost() { rampTok++; clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
+function killGhost() { if (S.ov) killOv(S.ov); rampTok++; clearTimeout(S.discT); if (!S.changing) npDiscBack(); xf = false; S.fadeIn = 0; S.dipIn = 0; S.dipping = false; if (G.ready) { G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } }
 let pauseTok = 0;
 async function softPlay(hold = 0) {
   if (!cur()) return; S.wantPlay = true; pauseTok++;
@@ -1069,6 +1126,7 @@ async function softPlay(hold = 0) {
 }
 function softPause() {
   S.wantPlay = false; const tok = ++pauseTok;
+  if (S.ov) killOv(S.ov);
   if (xf) killGhost();
   if (G.ready && !audio.paused) {
     const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(G.fade.gain.value, n); G.fade.gain.linearRampToValueAtTime(0, n + 0.07);
@@ -1132,6 +1190,7 @@ function seek(t) {
 audio.addEventListener('seeked', () => { if (S.seeking) finishSeek(); });
 function ended() {
   if (S.sleep.eot) { clearSleep(); S.wantPlay = false; S.playing = false; onState(); toast('Temporizador: música detenida'); return; }
+  if (S.ov && !S.ov.handed) { handoff(); return; }
   if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else next(true);
 }
 let sleepT = null;
@@ -1202,13 +1261,16 @@ function discGuard() {
   const d = audio.duration; if (!d || !isFinite(d)) return;
   if ((d - audio.currentTime) > 10 || (S.seeking && (d - curT()) > 4)) npDiscBack();
 }
-setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); } }, 250);
+setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); if (S.ov && !S.ov.handed && audio.duration && audio.duration - audio.currentTime < 0.12) handoff(); } }, 100);
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
-  if (!x || xf || S.dipping || S.seeking || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
+  if (!x || xf || S.ov || S.dipping || S.seeking || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
+  if (S.ov) return;
+  if (rem <= x + 25 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
+  if (rem <= x && rem > 0.3 && startOverlap(rem)) return;
   const h2 = Math.max(1, x / 2);
   if (rem <= h2 && rem > 0.25) dipOut(rem, h2);
 }
