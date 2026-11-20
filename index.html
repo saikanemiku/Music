@@ -1057,7 +1057,24 @@ function prev() {
   if (!S.queue.length) return; killGhost();
   if (audio.currentTime > 3 || S.idx === 0) audio.currentTime = 0; else { S.idx--; loadCurrent(true); }
 }
-function seek(t) { audio.currentTime = Math.max(0, Math.min(t, audio.duration || S.dur || t)); onTime(); }
+const curT = () => (S.seeking ? S.seekTo : audio.currentTime) || 0;
+function finishSeek() {
+  if (!S.seeking) return; S.seeking = false; clearTimeout(S.seekT);
+  const resume = S.seekResume && S.wantPlay !== false; S.seekResume = false;
+  onTime(); if (resume) softPlay();
+}
+function seek(t) {
+  if (!real()) return;
+  const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur || t;
+  t = Math.max(0, Math.min(t, d)); killGhost();
+  if (!S.seeking && !audio.paused) S.seekResume = true;
+  S.seeking = true; S.seekTo = t;
+  if (G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
+  if (!audio.paused) audio.pause();
+  audio.currentTime = t; onTime();
+  clearTimeout(S.seekT); S.seekT = setTimeout(finishSeek, 4000);
+}
+audio.addEventListener('seeked', () => { if (S.seeking && Math.abs(audio.currentTime - S.seekTo) < 1.5) finishSeek(); });
 function ended() {
   if (S.sleep.eot) { clearSleep(); S.wantPlay = false; S.playing = false; onState(); toast('Temporizador: música detenida'); return; }
   if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else next();
@@ -1086,7 +1103,7 @@ function playNext(t) { if (!S.queue.length) return play([t.id]); S.queue.splice(
 function addQueue(t) { if (!S.queue.length) return play([t.id]); S.queue.push(t.id); S.orig.push(t.id); toast('Añadida a la cola'); }
 
 audio.addEventListener('play', () => { if (!real()) return; if (G.ctx && G.ctx.state !== 'running') G.ctx.resume().catch(() => {}); if (G.outEl && G.outEl.paused) G.outEl.play().catch(() => {}); S.playing = true; S.wantPlay = true; onState(); });
-audio.addEventListener('pause', () => { if (!real() || audio.ended) return; S.playing = false; onState(); });
+audio.addEventListener('pause', () => { if (!real() || audio.ended || S.seeking) return; S.playing = false; onState(); });
 audio.addEventListener('ended', () => { if (real()) ended(); });
 audio.addEventListener('timeupdate', () => { if (real()) onTime(); });
 audio.addEventListener('loadedmetadata', () => { if (real()) { if (isFinite(audio.duration)) S.dur = audio.duration; applyAudio(false); onTime(); } });
@@ -1121,7 +1138,7 @@ if ('mediaSession' in navigator) {
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
-  if (!x || xf || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
+  if (!x || xf || S.seeking || !G.ready || !S.playing || S.repeat === 2 || S.sleep.eot || !hasNext()) return;
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
   if (rem <= x && rem > 0.3) startCrossfade(rem);
@@ -1151,12 +1168,12 @@ let lastPos = 0;
 function onTime() {
   checkSleep(); maybeCrossfade();
   const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur;
-  const f = d ? Math.min(1, audio.currentTime / d) : 0;
+  const f = d ? Math.min(1, curT() / d) : 0;
   const bar = $('#mini .pbar>div'); if (bar) bar.style.width = f * 100 + '%';
   npTime(d);
   if ('mediaSession' in navigator && d && Date.now() - lastPos > 1000) {
     lastPos = Date.now();
-    try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(audio.currentTime, d), playbackRate: audio.playbackRate || 1 }); } catch {}
+    try { navigator.mediaSession.setPositionState({ duration: d, position: Math.min(curT(), d), playbackRate: audio.playbackRate || 1 }); } catch {}
   }
 }
 function onState() {
@@ -1185,7 +1202,7 @@ function renderMini() {
     h('div', { class: 'pbar' }, h('div')));
   m.append(el); onTimeBarOnly();
 }
-function onTimeBarOnly() { const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur; const b = $('#mini .pbar>div'); if (b) b.style.width = (d ? Math.min(1, audio.currentTime / d) : 0) * 100 + '%'; }
+function onTimeBarOnly() { const d = audio.duration && isFinite(audio.duration) ? audio.duration : S.dur; const b = $('#mini .pbar>div'); if (b) b.style.width = (d ? Math.min(1, curT() / d) : 0) * 100 + '%'; }
 const TABS = [['home', 'Inicio', 'home'], ['search', 'Buscar', 'search'], ['library', 'Biblioteca', 'library'], ['settings', 'Ajustes', 'settings']];
 function renderTabs() {
   const n = $('#tabs'); n.replaceChildren(...TABS.map(([k, label, icon]) => h('button', {
@@ -1862,6 +1879,10 @@ function vinylEl(t) {
   const el = h('div', { class: 'vwrap' }, rec, h('div', { class: 'sheen' }), arm, h('i', { class: 'hub' }));
   return { el, rec, arm };
 }
+function npArmSoon() {
+  if (!NP || !NP.arm) return; clearTimeout(NP.armT); NP.armHold = true;
+  NP.armT = setTimeout(() => { if (NP) { NP.armHold = false; npArm(); } }, 220);
+}
 function npArm() {
   if (!NP || !NP.arm) return;
   const on = S.playing, f = Math.max(0, Math.min(1, NP.f || 0));
@@ -1958,15 +1979,15 @@ function npState() {
   NP.shufb.innerHTML = ic('shuffle', 24); NP.shufb.className = 'ib' + (S.shuffle ? ' on' : ''); NP.shufb.onclick = toggleShuffle;
   NP.repb.innerHTML = ic(S.repeat === 2 ? 'repeat1' : 'repeat', 24); NP.repb.className = 'ib' + (S.repeat ? ' on' : ''); NP.repb.onclick = cycleRepeat;
   const a = NP.cover.firstChild; if (a && !NP.arm) a.classList.toggle('paused', !S.playing);
-  npArm();
+  npArmSoon();
 }
 let npSleepTick = 0;
 function npTime(d) {
   if (!NP) return;
   if (S.sleep.at && Date.now() - npSleepTick > 15000) { npSleepTick = Date.now(); npSleep(); }
   if (NP.dragging || NP.vdrag) return; d = d || 0;
-  NP.f = d ? audio.currentTime / d : 0; if (NP.arm && S.playing) npArm();
-  const t = audio.currentTime || 0;
+  const t = curT();
+  NP.f = d ? t / d : 0; if (NP.arm && S.playing && !NP.armHold) npArm();
   NP.seekEl.value = d ? (t / d) * 1000 : 0; NP.seekEl.paint(); NP.tl.textContent = fmt(t); NP.tr.textContent = '-' + fmt(Math.max(0, d - t));
 }
 function openQueue() {
