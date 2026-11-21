@@ -1033,7 +1033,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v20';
+const APP_VER = 'v21';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1046,9 +1046,10 @@ function fadeWhy() {
   if (!d || !isFinite(d)) return 'duración desconocida';
   if (d < x * 2 + 2) return 'la canción es muy corta para ' + x + ' s';
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1), h2 = Math.max(1, x / 2);
+  if (G.buf && G.bufReady === (cur() || {}).id) S.ovinfo = 'memoria ' + G.buf.duration.toFixed(1) + ' s / reproductor ' + d.toFixed(1) + ' s';
   return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
 }
-setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + APP_VER; }, 500);
+setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + (S.ovinfo || '') + ' · ' + APP_VER; }, 500);
 function ramp2(param, from, to, secs, shape, alive) {
   const t0 = performance.now(), ms = Math.max(0.1, secs) * 1000;
   const step = () => {
@@ -1081,7 +1082,10 @@ async function prepBuf() {
 function startOverlap(rem) {
   const c = cur(), ni = nextIdx(); if (!c || ni < 0 || G.bufReady !== c.id || !G.buf) return false;
   try {
-    const rate = audio.playbackRate || 1, off = Math.min(audio.currentTime, G.buf.duration - 0.2);
+    const rate = audio.playbackRate || 1, ed = audio.duration || G.buf.duration, ratio = G.buf.duration / ed;
+    // en algunos mp3/m4a la duración del reproductor y la de la copia en memoria difieren varios segundos: llevo la posición a escala
+    const off = Math.max(0, Math.min(audio.currentTime * (Math.abs(ratio - 1) > 0.003 ? ratio : 1), G.buf.duration - 0.2));
+    S.ovinfo = 'memoria ' + G.buf.duration.toFixed(1) + ' s / reproductor ' + ed.toFixed(1) + ' s';
     const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = rate;
     const gb = G.ctx.createGain(); gb.gain.value = 1; src.connect(gb); gb.connect(G.pre);
     const tail = Math.max(0.4, (G.buf.duration - off) / rate);
