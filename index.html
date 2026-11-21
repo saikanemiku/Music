@@ -1020,21 +1020,10 @@ async function loadCurrent(autoplay, ov) {
     try {
       if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume();
       if (ov) {
-        await new Promise((r) => { if (audio.readyState >= 1) r(); else audio.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 2500); });
-        const bp = () => (G.ctx.currentTime - ov.t0) * ov.rate;
-        try { audio.currentTime = bp() + OV_LOAD; } catch {}
         await audio.play();
-        // la canción nueva suena aún por el canal en memoria; ajusto la posición del reproductor (en silencio) hasta que coincida
-        for (let i = 0; i < 4 && S.ov === ov; i++) {
-          await sleep(380); if (S.ov !== ov) return;
-          const diff = audio.currentTime - bp(); S.ovdiff = diff;
-          if (Math.abs(diff) < 0.035) break;
-          OV_LOAD = Math.max(0.02, Math.min(1.5, OV_LOAD - diff)); ls.set('mp.ovload', OV_LOAD);
-          try { audio.currentTime = bp() + OV_LOAD; } catch {}
-        }
-        if (S.ov !== ov) return;
-        rampFade(0, 1, 0.8, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.8, 'lin', () => S.ov === ov);
-        setTimeout(() => killOv(ov), 1000);
+        const left = Math.max(0.3, ov.tail - (G.ctx.currentTime - ov.t0));
+        if (S.ov === ov) rampFade(0, 1, left, 'in');
+        else rampFade(0, 1, 0.3, 'in');
         return;
       }
       await audio.play();
@@ -1043,7 +1032,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v17';
+const APP_VER = 'v18';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1059,7 +1048,6 @@ function fadeWhy() {
   return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
 }
 setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + APP_VER; }, 500);
-let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35;
 function ramp2(param, from, to, secs, shape, alive) {
   const t0 = performance.now(), ms = Math.max(0.1, secs) * 1000;
   const step = () => {
@@ -1078,7 +1066,7 @@ function killOv(ov) {
 const nextIdx = () => S.idx + 1 < S.queue.length ? S.idx + 1 : S.repeat === 1 ? 0 : -1;
 // superposición real: la siguiente canción se decodifica en memoria y suena mezclada con el final de la actual
 async function prepBuf() {
-  const ni = nextIdx(); if (ni < 0 || !G.ctx) return; const id = S.queue[ni];
+  const t = cur(); if (!t || !G.ctx) return; const id = t.id;
   if (G.bufFor === id) return; G.bufFor = id; G.buf = null; G.bufReady = null;
   try {
     const blob = await dbGet('files', id); if (!blob || G.bufFor !== id) return;
@@ -1087,23 +1075,23 @@ async function prepBuf() {
     if (G.bufFor === id) { G.buf = buf; G.bufReady = id; }
   } catch (e) { console.warn('prepBuf', e); }
 }
+// superposición: el final de la canción actual sigue sonando desde memoria (bajando) y la siguiente arranca desde 0 en el reproductor (subiendo)
 function startOverlap(rem) {
-  const ni = nextIdx(); if (ni < 0 || G.bufReady !== S.queue[ni]) return false;
+  const c = cur(), ni = nextIdx(); if (!c || ni < 0 || G.bufReady !== c.id || !G.buf) return false;
   try {
-    const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = audio.playbackRate || 1;
-    const gb = G.ctx.createGain(); gb.gain.value = 0; src.connect(gb); gb.connect(G.pre);
-    const ov = { src, gb, t0: G.ctx.currentTime, rate: audio.playbackRate || 1, handed: false };
-    S.ov = ov; src.start();
-    rampFade(1, 0, Math.max(0.3, rem - 0.05), 'out');
-    ramp2(gb.gain, 0, 1, Math.max(0.3, rem - 0.05), 'in', () => S.ov === ov && !ov.handed);
-    clearTimeout(S.discT); S.discT = setTimeout(npDiscOut, 0);
+    const rate = audio.playbackRate || 1, off = Math.min(audio.currentTime, G.buf.duration - 0.2);
+    const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = rate;
+    const gb = G.ctx.createGain(); gb.gain.value = 1; src.connect(gb); gb.connect(G.pre);
+    const tail = Math.max(0.4, (G.buf.duration - off) / rate);
+    const ov = { src, gb, t0: G.ctx.currentTime, tail };
+    G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; rampTok++;   // el reproductor deja de sonar la vieja: la sigue el canal en memoria
+    S.ov = ov; src.start(0, off);
+    ramp2(gb.gain, 1, 0, tail, 'out', () => S.ov === ov);
+    setTimeout(() => killOv(ov), tail * 1000 + 300);
+    S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0;
+    loadCurrent(true, ov);
     return true;
   } catch (e) { console.warn('overlap', e); if (S.ov) killOv(S.ov); return false; }
-}
-function handoff() {
-  const ov = S.ov; if (!ov || ov.handed) return; ov.handed = true;
-  const ni = nextIdx(); if (ni < 0) { killOv(ov); return; }
-  S.idx = ni; S.dipping = false; loadCurrent(true, ov);
 }
 let rampTok = 0;
 // fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
@@ -1162,6 +1150,25 @@ const curT = () => {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // iOS a veces avisa que terminó de saltar antes de tiempo y suena un instante el punto anterior:
 // esperamos a que de verdad esté en el punto elegido, y al reanudar mantenemos el volumen en 0 un momento
+async function resumeAfterSeek(T, tok) {
+  S.wantPlay = true; pauseTok++;
+  const dead = () => tok !== S.seekTok || S.seeking || !S.wantPlay;
+  try {
+    if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume();
+    if (G.outEl && G.outEl.paused) G.outEl.play().catch(() => {});
+    rampTok++; G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0;
+    await audio.play();
+    for (let tries = 0; tries < 3; tries++) {
+      const tp = Date.now();
+      while (Date.now() - tp < 2500 && audio.currentTime - T < 0.3) { await sleep(60); if (dead()) return; }
+      const el = (Date.now() - tp) / 1000, ct = audio.currentTime;
+      if (ct >= T + 0.2 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
+      audio.currentTime = T; await sleep(350); if (dead()) return;   // sonaba otra parte: volver a colocarlo, aún en silencio
+    }
+    await sleep(120); if (dead()) return;
+    rampFade(0, 1, 0.25, 'lin');
+  } catch (e) { console.warn('resumeAfterSeek', e); try { G.fade.gain.value = 1; } catch {} }
+}
 async function finishSeek() {
   if (!S.seeking || S.finishing) return; S.finishing = true; clearTimeout(S.seekT);
   const tok = S.seekTok, T = S.seekTo, t0 = Date.now();
@@ -1177,6 +1184,7 @@ async function finishSeek() {
   const resume = S.seekResume && S.wantPlay !== false; S.seekResume = false;
   onTime();
   if (!resume) return;
+  if (G.ready) { await resumeAfterSeek(T, tok); return; }
   const tp = Date.now(); await softPlay(0.45);
   await sleep(300);
   if (tok !== S.seekTok || S.seeking || audio.paused) return;
@@ -1197,7 +1205,6 @@ function seek(t) {
 audio.addEventListener('seeked', () => { if (S.seeking) finishSeek(); });
 function ended() {
   if (S.sleep.eot) { clearSleep(); S.wantPlay = false; S.playing = false; onState(); toast('Temporizador: música detenida'); return; }
-  if (S.ov && !S.ov.handed) { handoff(); return; }
   if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else next(true);
 }
 let sleepT = null;
@@ -1268,7 +1275,7 @@ function discGuard() {
   const d = audio.duration; if (!d || !isFinite(d)) return;
   if ((d - audio.currentTime) > 10 || (S.seeking && (d - curT()) > 4)) npDiscBack();
 }
-setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); if (S.ov && !S.ov.handed && audio.duration && audio.duration - audio.currentTime < 0.12) handoff(); } }, 100);
+setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); } }, 100);
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
@@ -1276,7 +1283,7 @@ function maybeCrossfade() {
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
   if (S.ov || Date.now() < S.holdUntil + 600) return;
-  if (audio.currentTime > 1.5 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
+  if (audio.currentTime > 1.5 && G.bufFor !== (cur() || {}).id) prepBuf();
   if (rem <= x && rem > 0.3 && startOverlap(rem)) return;
   const h2 = Math.max(1, x / 2);
   if (rem <= h2 && rem > 0.25) dipOut(rem, h2);
