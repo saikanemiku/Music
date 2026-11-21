@@ -1024,7 +1024,15 @@ async function loadCurrent(autoplay, ov) {
         const bp = () => (G.ctx.currentTime - ov.t0) * ov.rate;
         try { audio.currentTime = bp() + OV_LOAD; } catch {}
         await audio.play();
-        OV_LOAD = Math.max(0.1, Math.min(1.5, OV_LOAD - (audio.currentTime - bp()))); ls.set('mp.ovload', OV_LOAD);
+        // la canción nueva suena aún por el canal en memoria; ajusto la posición del reproductor (en silencio) hasta que coincida
+        for (let i = 0; i < 4 && S.ov === ov; i++) {
+          await sleep(380); if (S.ov !== ov) return;
+          const diff = audio.currentTime - bp(); S.ovdiff = diff;
+          if (Math.abs(diff) < 0.035) break;
+          OV_LOAD = Math.max(0.02, Math.min(1.5, OV_LOAD - diff)); ls.set('mp.ovload', OV_LOAD);
+          try { audio.currentTime = bp() + OV_LOAD; } catch {}
+        }
+        if (S.ov !== ov) return;
         rampFade(0, 1, 0.8, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.8, 'lin', () => S.ov === ov);
         setTimeout(() => killOv(ov), 1000);
         return;
@@ -1035,7 +1043,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v16';
+const APP_VER = 'v17';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1183,7 +1191,6 @@ function seek(t) {
   S.seeking = true; S.seekTo = t; S.seekTok = (S.seekTok || 0) + 1; S.finishing = false;
   if (G.ready) { const n = G.ctx.currentTime; G.fade.gain.cancelScheduledValues(n); G.fade.gain.setValueAtTime(0, n); }
   if (!audio.paused) audio.pause();
-  if (G.outEl && !G.outEl.paused) G.outEl.pause();
   audio.currentTime = t; onTime();
   clearTimeout(S.seekT); S.seekT = setTimeout(finishSeek, 3500);
 }
