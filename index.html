@@ -1033,7 +1033,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v21';
+const APP_VER = 'v22';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1046,7 +1046,7 @@ function fadeWhy() {
   if (!d || !isFinite(d)) return 'duración desconocida';
   if (d < x * 2 + 2) return 'la canción es muy corta para ' + x + ' s';
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1), h2 = Math.max(1, x / 2);
-  if (G.buf && G.bufReady === (cur() || {}).id) S.ovinfo = 'memoria ' + G.buf.duration.toFixed(1) + ' s / reproductor ' + d.toFixed(1) + ' s';
+  if (!S.ov && G.buf && G.bufReady === (cur() || {}).id && !/último|sin super/.test(S.ovinfo || '')) S.ovinfo = 'memoria ' + G.buf.duration.toFixed(1) + ' s / reproductor ' + d.toFixed(1) + ' s';
   return S.dipping ? 'bajando volumen ahora' : 'listo: empezará cuando falten ' + h2.toFixed(0) + ' s (faltan ' + rem.toFixed(0) + ' s)';
 }
 setInterval(() => { const e = document.getElementById('fwhy'); if (e) e.textContent = 'Estado: ' + fadeWhy() + ' · ' + (S.ovinfo || '') + ' · ' + APP_VER; }, 500);
@@ -1083,15 +1083,15 @@ function startOverlap(rem) {
   const c = cur(), ni = nextIdx(); if (!c || ni < 0 || G.bufReady !== c.id || !G.buf) return false;
   try {
     const rate = audio.playbackRate || 1, ed = audio.duration || G.buf.duration, ratio = G.buf.duration / ed;
-    // en algunos mp3/m4a la duración del reproductor y la de la copia en memoria difieren varios segundos: llevo la posición a escala
+    if (Math.abs(G.buf.duration - ed) > 1.0) { S.ovinfo = 'sin superposición (memoria ' + G.buf.duration.toFixed(1) + ' s ≠ reproductor ' + ed.toFixed(1) + ' s): uso fundido de volumen'; return false; }
     const off = Math.max(0, Math.min(audio.currentTime * (Math.abs(ratio - 1) > 0.003 ? ratio : 1), G.buf.duration - 0.2));
-    S.ovinfo = 'memoria ' + G.buf.duration.toFixed(1) + ' s / reproductor ' + ed.toFixed(1) + ' s';
+    const t00 = G.ctx.currentTime; S.ovinfo = 'último cambio: cola desde ' + off.toFixed(1) + ' s de ' + G.buf.duration.toFixed(1) + ' (faltaban ' + rem.toFixed(1) + ' s)';
     const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = rate;
     const gb = G.ctx.createGain(); gb.gain.value = 1; src.connect(gb); gb.connect(G.pre);
     const tail = Math.max(0.4, (G.buf.duration - off) / rate);
     const ov = { src, gb, t0: G.ctx.currentTime, tail };
     G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; rampTok++;   // el reproductor deja de sonar la vieja: la sigue el canal en memoria
-    S.ov = ov; src.start(0, off);
+    S.ov = ov; src.onended = () => { S.ovinfo += ' · la cola sonó ' + (G.ctx.currentTime - t00).toFixed(1) + ' s de ' + tail.toFixed(1); }; src.start(0, off);
     setTimeout(() => killOv(ov), tail * 1000 + 300);
     S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0;
     loadCurrent(true, ov);
