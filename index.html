@@ -1032,7 +1032,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v18';
+const APP_VER = 'v19';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1160,13 +1160,13 @@ async function resumeAfterSeek(T, tok) {
     await audio.play();
     for (let tries = 0; tries < 3; tries++) {
       const tp = Date.now();
-      while (Date.now() - tp < 2500 && audio.currentTime - T < 0.3) { await sleep(60); if (dead()) return; }
+      while (Date.now() - tp < 3500 && audio.currentTime - T < 1.0) { await sleep(60); if (dead()) return; }
       const el = (Date.now() - tp) / 1000, ct = audio.currentTime;
-      if (ct >= T + 0.2 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
+      if (ct >= T + 0.8 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
       audio.currentTime = T; await sleep(350); if (dead()) return;   // sonaba otra parte: volver a colocarlo, aún en silencio
     }
-    await sleep(120); if (dead()) return;
-    rampFade(0, 1, 0.25, 'lin');
+    await sleep(150); if (dead()) return;
+    rampFade(0, 1, 0.3, 'lin');
   } catch (e) { console.warn('resumeAfterSeek', e); try { G.fade.gain.value = 1; } catch {} }
 }
 async function finishSeek() {
@@ -1861,7 +1861,7 @@ function renderSettings(v) {
   const T = S.theme;
   const upd = (fn) => { fn(); saveTheme(); applyTheme(); renderMini(); };
   v.append(h('div', { class: 'title' }, 'Ajustes'));
-  v.append(h('div', { class: 'grp-t' }, 'Audio'),
+  v.append(h('div', { class: 'grp-t' }, 'Audio · versión ' + APP_VER),
     h('div', { class: 'setgrp' },
       h('button', { class: 'setrow', style: { width: '100%' }, onclick: openEQ }, h('span', {}, 'Ecualizador, mezcla y perfiles'), h('span', { html: ic('settings', 20) }))));
   const MODES = [
