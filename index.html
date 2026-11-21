@@ -998,7 +998,8 @@ async function loadCurrent(autoplay, ov) {
   const t = cur(); if (!t) return;
   const my = ++S.loadSeq;
   let blob = null;
-  try { blob = await dbGet('files', t.id); } catch {}
+  if (ov && G.pre2 && G.pre2.id === t.id) blob = G.pre2.blob;
+  else { try { blob = await dbGet('files', t.id); } catch {} }
   if (my !== S.loadSeq) return;
   if (!blob) {
     toast('No se pudo abrir “' + t.title + '”'); S.fails++;
@@ -1022,7 +1023,7 @@ async function loadCurrent(autoplay, ov) {
       if (ov) {
         await audio.play();
         const left = Math.max(0.3, ov.tail - (G.ctx.currentTime - ov.t0));
-        if (S.ov === ov) rampFade(0, 1, left, 'in');
+        if (S.ov === ov) { rampFade(0, 1, left, 'in'); ramp2(ov.gb.gain, 1, 0, left, 'out', () => S.ov === ov); }
         else rampFade(0, 1, 0.3, 'in');
         return;
       }
@@ -1032,7 +1033,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v19';
+const APP_VER = 'v20';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1073,6 +1074,7 @@ async function prepBuf() {
     const ab = await blob.arrayBuffer(); if (G.bufFor !== id) return;
     const buf = await new Promise((res, rej) => { G.ctx.decodeAudioData(ab, res, rej); });
     if (G.bufFor === id) { G.buf = buf; G.bufReady = id; }
+    const ni = nextIdx(); if (ni >= 0) { const id2 = S.queue[ni]; dbGet('files', id2).then((b) => { if (b) G.pre2 = { id: id2, blob: b }; }).catch(() => {}); }
   } catch (e) { console.warn('prepBuf', e); }
 }
 // superposición: el final de la canción actual sigue sonando desde memoria (bajando) y la siguiente arranca desde 0 en el reproductor (subiendo)
@@ -1086,7 +1088,6 @@ function startOverlap(rem) {
     const ov = { src, gb, t0: G.ctx.currentTime, tail };
     G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0; rampTok++;   // el reproductor deja de sonar la vieja: la sigue el canal en memoria
     S.ov = ov; src.start(0, off);
-    ramp2(gb.gain, 1, 0, tail, 'out', () => S.ov === ov);
     setTimeout(() => killOv(ov), tail * 1000 + 300);
     S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0;
     loadCurrent(true, ov);
@@ -1160,13 +1161,13 @@ async function resumeAfterSeek(T, tok) {
     await audio.play();
     for (let tries = 0; tries < 3; tries++) {
       const tp = Date.now();
-      while (Date.now() - tp < 3500 && audio.currentTime - T < 1.0) { await sleep(60); if (dead()) return; }
+      while (Date.now() - tp < 3500 && audio.currentTime - T < 0.75) { await sleep(60); if (dead()) return; }
       const el = (Date.now() - tp) / 1000, ct = audio.currentTime;
-      if (ct >= T + 0.8 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
+      if (ct >= T + 0.6 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
       audio.currentTime = T; await sleep(350); if (dead()) return;   // sonaba otra parte: volver a colocarlo, aún en silencio
     }
     await sleep(150); if (dead()) return;
-    rampFade(0, 1, 0.3, 'lin');
+    rampFade(0, 1, 0.2, 'lin');
   } catch (e) { console.warn('resumeAfterSeek', e); try { G.fade.gain.value = 1; } catch {} }
 }
 async function finishSeek() {
