@@ -266,6 +266,10 @@ input,textarea,select{-webkit-user-select:text;user-select:text}
 .rec .lab::after{content:"";position:absolute;left:50%;top:50%;width:13%;aspect-ratio:1;margin:-6.5% 0 0 -6.5%;border-radius:50%;background:radial-gradient(circle,#050505 0 45%,#8a8a8a 50%,#2b2b2b 70%)}
 .arm{position:absolute;inset:0;transform-origin:93% 9%;transition:transform 1s cubic-bezier(.45,.05,.2,1);z-index:3;pointer-events:none;filter:drop-shadow(3px 5px 5px rgba(0,0,0,.45))}
 .arm.drag{transition:none}
+.arm svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.sleeve{position:absolute;left:-5%;top:11%;width:88%;aspect-ratio:1;border-radius:5px;background-size:cover;background-position:center;transform:rotate(-2.2deg);z-index:0;box-shadow:0 22px 38px rgba(0,0,0,.55),0 3px 8px rgba(0,0,0,.45)}
+.sleeve::before{content:"";position:absolute;inset:0;border-radius:5px;background:linear-gradient(135deg,rgba(255,255,255,.18),rgba(255,255,255,0) 38%,rgba(0,0,0,.38)),radial-gradient(circle at 70% 55%,rgba(0,0,0,.45),transparent 62%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14),inset 0 0 46px rgba(0,0,0,.35)}
+.sleeve::after{content:"";position:absolute;left:3%;right:3%;top:3%;bottom:3%;border-radius:3px;border:1px solid rgba(255,255,255,.10)}
 .disc{position:absolute;inset:0;transition:transform 1s cubic-bezier(.5,0,.25,1),opacity .9s ease;will-change:transform}
 .disc.out{transform:translate(-118%,-4%) rotate(-14deg);opacity:0}
 .disc.pre{transform:translate(118%,6%) rotate(14deg);opacity:0;transition:none}
@@ -1045,7 +1049,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v29';
+const APP_VER = 'v30';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -2047,12 +2051,22 @@ function armDeg(r) {
   const al = Math.acos(Math.max(-1, Math.min(1, (VG.L * VG.L + D * D - r * r) / (2 * VG.L * D))));
   return (beta - al) * 180 / Math.PI - 90;
 }
+// brazo: el pivote está en (93,9) y la punta de la aguja a 72 de distancia (VG.L), justo debajo
+const ARM_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><defs>' +
+  '<linearGradient id="ag1" x1="0" x2="1"><stop offset="0" stop-color="#fafafa"/><stop offset=".45" stop-color="#bcbcbc"/><stop offset="1" stop-color="#6a6a6a"/></linearGradient>' +
+  '<linearGradient id="ag2" x1="0" x2="1"><stop offset="0" stop-color="#3a3a3a"/><stop offset="1" stop-color="#0e0e0e"/></linearGradient></defs>' +
+  '<rect x="90.4" y="-8" width="5.2" height="12.5" rx="1.4" fill="url(#ag1)"/><rect x="90.4" y="-3.2" width="5.2" height=".7" fill="#00000040"/><rect x="90.4" y="-1.4" width="5.2" height=".7" fill="#00000040"/>' +
+  '<rect x="92.15" y="8" width="1.7" height="59" rx=".85" fill="url(#ag1)"/>' +
+  '<path d="M90.6 65.5 h4.8 l.9 5.2 -.9 8.6 h-4.8 l-.9 -8.6z" fill="url(#ag1)" stroke="#0004" stroke-width=".2"/>' +
+  '<rect x="91.2" y="76.2" width="3.6" height="3.9" rx=".6" fill="url(#ag2)"/><path d="M93 80 L93 81.2" stroke="#ddd" stroke-width=".5" stroke-linecap="round"/>' +
+  '<path d="M95.3 69.2 q3 .3 3.6 3.6" stroke="#bdbdbd" stroke-width=".9" fill="none" stroke-linecap="round"/></svg>';
 function vinylEl(t) {
   const u = artURL(t);
   const lab = h('div', { class: 'lab', style: u ? { backgroundImage: `url("${u}")` } : { background: tint(t, true, 40) } });
-  const rec = h('div', { class: 'rec' }, lab), arm = h('div', { class: 'arm' }, h('i', { class: 'cw' }), h('i', { class: 'bar' }), h('i', { class: 'hd' }));
+  const sleeve = h('div', { class: 'sleeve', style: u ? { backgroundImage: `url("${u}")` } : { background: `linear-gradient(135deg,${tint(t, true, 46)},${tint(t, true, 22)})` } });
+  const rec = h('div', { class: 'rec' }, lab), arm = h('div', { class: 'arm', html: ARM_SVG });
   const disc = h('div', { class: 'disc' }, rec, h('div', { class: 'sheen' }));
-  const el = h('div', { class: 'vwrap' }, disc, arm, h('i', { class: 'hub' }));
+  const el = h('div', { class: 'vwrap' }, sleeve, disc, arm, h('i', { class: 'hub' }));
   return { el, rec, arm, disc };
 }
 function npArmSoon() {
