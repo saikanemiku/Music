@@ -1045,7 +1045,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v28';
+const APP_VER = 'v29';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1183,28 +1183,39 @@ async function resumeAfterSeek(T, tok) {
     if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume();
     if (G.outEl && G.outEl.paused) G.outEl.play().catch(() => {});
     rampTok++; G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 0;
-    await audio.play();
+    // recarga limpia del archivo en el punto elegido: así no queda nada del tramo antiguo en el búfer del reproductor
+    S.reloading = true;
+    try {
+      audio.pause(); audio.src = curURL; applyAudio(false); audio.load();
+      await new Promise((r) => { if (audio.readyState >= 1) r(); else audio.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 3000); });
+      if (dead()) return;
+      audio.currentTime = T;
+      const t1 = Date.now();
+      while ((audio.seeking || audio.readyState < 3) && Date.now() - t1 < 3000) await sleep(40);
+      if (dead()) return;
+      await audio.play();
+    } finally { setTimeout(() => { S.reloading = false; }, 300); }
     for (let tries = 0; tries < 3; tries++) {
       const tp = Date.now();
-      while (Date.now() - tp < 3500 && audio.currentTime - T < 0.75) { await sleep(60); if (dead()) return; }
+      while (Date.now() - tp < 2500 && audio.currentTime - T < 0.25) { await sleep(40); if (dead()) return; }
       const el = (Date.now() - tp) / 1000, ct = audio.currentTime;
-      if (ct >= T + 0.6 && ct <= T + el + 1.2) break;           // avanzó desde el punto elegido: es el audio correcto
-      audio.currentTime = T; await sleep(350); if (dead()) return;   // sonaba otra parte: volver a colocarlo, aún en silencio
+      if (ct >= T + 0.15 && ct <= T + el + 1.2) break;
+      audio.currentTime = T; await sleep(300); if (dead()) return;
     }
-    await sleep(150); if (dead()) return;
+    if (dead()) return;
     rampFade(0, 1, 0.2, 'lin');
   } catch (e) { console.warn('resumeAfterSeek', e); try { G.fade.gain.value = 1; } catch {} }
 }
 async function finishSeek() {
   if (!S.seeking || S.finishing) return; S.finishing = true; clearTimeout(S.seekT);
   const tok = S.seekTok, T = S.seekTo, t0 = Date.now();
-  for (let i = 0; i < 4 && Date.now() - t0 < 6000; i++) {
+  for (let i = 0; i < 4 && Date.now() - t0 < 6000 && !G.ready; i++) {
     while ((audio.readyState < 3 || audio.seeking) && Date.now() - t0 < 6000) await sleep(60);
     if (tok !== S.seekTok) { S.finishing = false; return; }
     if (Math.abs(audio.currentTime - T) < 0.6) break;
     audio.currentTime = T; await sleep(250);
   }
-  await sleep(120);
+  if (!G.ready) await sleep(120);
   if (tok !== S.seekTok) { S.finishing = false; return; }
   S.seeking = false; S.finishing = false; S.holdT = T; S.holdFrom = Date.now(); S.holdUntil = Date.now() + 1800;
   const resume = S.seekResume && S.wantPlay !== false; S.seekResume = false;
@@ -1258,7 +1269,7 @@ function playNext(t) { if (!S.queue.length) return play([t.id]); S.queue.splice(
 function addQueue(t) { if (!S.queue.length) return play([t.id]); S.queue.push(t.id); S.orig.push(t.id); toast('Añadida a la cola'); }
 
 audio.addEventListener('play', () => { if (!real()) return; if (G.ctx && G.ctx.state !== 'running') G.ctx.resume().catch(() => {}); if (G.outEl && G.outEl.paused) G.outEl.play().catch(() => {}); S.playing = true; S.wantPlay = true; onState(); });
-audio.addEventListener('pause', () => { if (!real() || audio.ended || S.seeking) return; S.playing = false; onState(); });
+audio.addEventListener('pause', () => { if (!real() || audio.ended || S.seeking || S.reloading) return; S.playing = false; onState(); });
 audio.addEventListener('ended', () => { if (real()) ended(); });
 audio.addEventListener('timeupdate', () => { if (real()) onTime(); });
 audio.addEventListener('loadedmetadata', () => { if (real()) { if (isFinite(audio.duration)) S.dur = audio.duration; applyAudio(false); onTime(); } });
