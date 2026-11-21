@@ -1033,7 +1033,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v24';
+const APP_VER = 'v25';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1094,7 +1094,7 @@ function startOverlap(rem) {
     setTimeout(() => killOv(ov), tail * 1000 + 300);
     // traspaso suave (con una pequeña espera): la copia en memoria entra mientras el reproductor sale, y solo después cargo la siguiente
     rampFade(1, 0, 0.12, 'lin'); ramp2(gb.gain, 0, 1, 0.12, 'lin', () => S.ov === ov);
-    setTimeout(() => { if (S.ov !== ov) return; S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0; loadCurrent(true, ov); }, 200);
+    setTimeout(() => { if (S.ov !== ov) return; S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0; loadCurrent(true, ov); }, Math.max(200, Math.min(2000, (tail - 1) * 1000)));   // espera de 2 s: la vieja suena sola antes de cargar la nueva
     return true;
   } catch (e) { console.warn('overlap', e); if (S.ov) killOv(S.ov); return false; }
 }
