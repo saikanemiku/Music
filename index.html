@@ -1021,10 +1021,21 @@ async function loadCurrent(autoplay, ov) {
     try {
       if (G.ctx && G.ctx.state !== 'running') await G.ctx.resume();
       if (ov) {
+        await new Promise((r) => { if (audio.readyState >= 1) r(); else audio.addEventListener('loadedmetadata', r, { once: true }); setTimeout(r, 2500); });
+        const bp = () => Math.max(0, (G.ctx.currentTime - ov.t0)) * ov.rate;
+        try { audio.currentTime = bp() + OV_LOAD; } catch {}
         await audio.play();
-        const left = Math.max(0.3, ov.tail - (G.ctx.currentTime - ov.t0));
-        if (S.ov === ov) rampFade(0, 1, left, 'in');   // la vieja NO baja: sigue a su volumen hasta terminar
-        else rampFade(0, 1, 0.3, 'in');
+        // la nueva sigue sonando desde memoria; ajusto la posición del reproductor (en silencio) hasta que coincida
+        for (let i = 0; i < 4 && S.ov === ov; i++) {
+          await sleep(380); if (S.ov !== ov) return;
+          const diff = audio.currentTime - bp();
+          if (Math.abs(diff) < 0.035) break;
+          OV_LOAD = Math.max(0.02, Math.min(1.5, OV_LOAD - diff)); ls.set('mp.ovload', OV_LOAD);
+          try { audio.currentTime = bp() + OV_LOAD; } catch {}
+        }
+        if (S.ov !== ov) return;
+        rampFade(0, 1, 0.15, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.15, 'lin', () => S.ov === ov);
+        setTimeout(() => killOv(ov), 500);
         return;
       }
       await audio.play();
@@ -1033,7 +1044,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v26';
+const APP_VER = 'v27';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1068,36 +1079,37 @@ function killOv(ov) {
 const nextIdx = () => S.idx + 1 < S.queue.length ? S.idx + 1 : S.repeat === 1 ? 0 : -1;
 // superposición real: la siguiente canción se decodifica en memoria y suena mezclada con el final de la actual
 async function prepBuf() {
-  const t = cur(); if (!t || !G.ctx) return; const id = t.id;
+  const ni = nextIdx(); if (ni < 0 || !G.ctx) return; const id = S.queue[ni];
   if (G.bufFor === id) return; G.bufFor = id; G.buf = null; G.bufReady = null;
   try {
     const blob = await dbGet('files', id); if (!blob || G.bufFor !== id) return;
+    G.pre2 = { id, blob };
     const ab = await blob.arrayBuffer(); if (G.bufFor !== id) return;
     const buf = await new Promise((res, rej) => { G.ctx.decodeAudioData(ab, res, rej); });
     if (G.bufFor === id) { G.buf = buf; G.bufReady = id; }
-    const ni = nextIdx(); if (ni >= 0) { const id2 = S.queue[ni]; dbGet('files', id2).then((b) => { if (b) G.pre2 = { id: id2, blob: b }; }).catch(() => {}); }
   } catch (e) { console.warn('prepBuf', e); }
 }
-// superposición: el final de la canción actual sigue sonando desde memoria (bajando) y la siguiente arranca desde 0 en el reproductor (subiendo)
+// superposición: la canción actual NO se toca (sigue en el reproductor hasta su final). La siguiente entra subiendo desde memoria,
+// y cuando la actual termina, el reproductor toma la nueva en su posición exacta.
 function startOverlap(rem) {
-  const c = cur(), ni = nextIdx(); if (!c || ni < 0 || G.bufReady !== c.id || !G.buf) return false;
+  const ni = nextIdx(); if (ni < 0 || G.bufReady !== S.queue[ni] || !G.buf) return false;
   try {
-    const rate = audio.playbackRate || 1, ed = audio.duration || G.buf.duration, ratio = G.buf.duration / ed;
-    if (Math.abs(G.buf.duration - ed) > 1.0) { S.ovinfo = 'sin superposición (memoria ' + G.buf.duration.toFixed(1) + ' s ≠ reproductor ' + ed.toFixed(1) + ' s): uso fundido de volumen'; return false; }
-    const off = Math.max(0, Math.min(audio.currentTime * (Math.abs(ratio - 1) > 0.003 ? ratio : 1), G.buf.duration - 0.2));
-    const t00 = G.ctx.currentTime; S.ovinfo = 'último cambio: cola desde ' + off.toFixed(1) + ' s de ' + G.buf.duration.toFixed(1) + ' (faltaban ' + rem.toFixed(1) + ' s)';
+    const rate = audio.playbackRate || 1;
+    const d = Math.max(0.2, Math.min(1.5, rem - 1));            // espera antes de que entre la nueva
     const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = rate;
     const gb = G.ctx.createGain(); gb.gain.value = 0; src.connect(gb); gb.connect(G.pre);
-    const tail = Math.max(0.4, (G.buf.duration - off) / rate);
-    const ov = { src, gb, t0: G.ctx.currentTime, tail };
-    S.ov = ov; src.onended = () => { S.ovinfo += ' · la cola sonó ' + (G.ctx.currentTime - t00).toFixed(1) + ' s de ' + tail.toFixed(1); }; src.start(0, off);
-    setTimeout(() => killOv(ov), tail * 1000 + 300);
-    // traspaso suave (con una pequeña espera): la copia en memoria entra mientras el reproductor sale, y solo después cargo la siguiente
-    rampFade(1, 0, 0.12, 'lin'); ramp2(gb.gain, 0, 1, 0.12, 'lin', () => S.ov === ov);
-    setTimeout(() => { if (S.ov !== ov) return; S.idx = ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0; loadCurrent(true, ov); }, Math.max(200, Math.min(1500, (tail - 1) * 1000)));   // espera de 1,5 s: la vieja suena sola antes de cargar la nueva
+    const ov = { src, gb, t0: G.ctx.currentTime + d, rate, handed: false, ni };
+    S.ov = ov; src.start(ov.t0);
+    S.ovinfo = 'último cambio: entra la nueva tras ' + d.toFixed(1) + ' s (faltaban ' + rem.toFixed(1) + ' s)';
+    setTimeout(() => { if (S.ov === ov) ramp2(gb.gain, 0, 1, Math.max(0.3, rem - d - 0.05), 'in', () => S.ov === ov && !ov.handed); }, d * 1000);
     return true;
   } catch (e) { console.warn('overlap', e); if (S.ov) killOv(S.ov); return false; }
 }
+function handoff() {
+  const ov = S.ov; if (!ov || ov.handed) return; ov.handed = true;
+  S.idx = ov.ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0; loadCurrent(true, ov);
+}
+let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35;
 let rampTok = 0;
 // fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
 function rampFade(from, to, secs, shape) {
@@ -1209,6 +1221,7 @@ function seek(t) {
 }
 audio.addEventListener('seeked', () => { if (S.seeking) finishSeek(); });
 function ended() {
+  if (S.ov && !S.ov.handed) { handoff(); return; }
   if (S.sleep.eot) { clearSleep(); S.wantPlay = false; S.playing = false; onState(); toast('Temporizador: música detenida'); return; }
   if (S.repeat === 2) { audio.currentTime = 0; audio.play().catch(() => {}); } else next(true);
 }
@@ -1288,7 +1301,7 @@ function maybeCrossfade() {
   const d = audio.duration; if (!d || !isFinite(d) || d < x * 2 + 2) return;
   const rem = (d - audio.currentTime) / (audio.playbackRate || 1);
   if (S.ov || Date.now() < S.holdUntil + 600) return;
-  if (audio.currentTime > 1.5 && G.bufFor !== (cur() || {}).id) prepBuf();
+  if (audio.currentTime > 1.5 && nextIdx() >= 0 && G.bufFor !== S.queue[nextIdx()]) prepBuf();
   if (rem <= x && rem > 0.3 && startOverlap(rem)) return;
   const h2 = Math.max(1, x / 2);
   if (rem <= h2 && rem > 0.25) dipOut(rem, h2);
