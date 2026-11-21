@@ -1034,6 +1034,7 @@ async function loadCurrent(autoplay, ov) {
           try { audio.currentTime = bp() + OV_LOAD; } catch {}
         }
         if (S.ov !== ov) return;
+        S.ovinfo += ' · listo';
         rampFade(0, 1, 0.15, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.15, 'lin', () => S.ov === ov);
         setTimeout(() => killOv(ov), 500);
         return;
@@ -1044,7 +1045,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v27';
+const APP_VER = 'v28';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1107,7 +1108,15 @@ function startOverlap(rem) {
 }
 function handoff() {
   const ov = S.ov; if (!ov || ov.handed) return; ov.handed = true;
-  S.idx = ov.ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0; loadCurrent(true, ov);
+  ov.hAt = Date.now(); S.ovinfo = (S.ovinfo || '') + ' · traspaso';
+  S.idx = ov.ni; S.dipping = false; S.fadeIn = 0; S.dipIn = 0;
+  Promise.resolve(loadCurrent(true, ov)).catch((e) => { S.ovinfo += ' · error ' + (e && e.message); failOv(ov); });
+}
+// red de seguridad: si el traspaso falla o se atasca, dejar la nueva sonando normal y seguir
+function failOv(ov) {
+  try { if (G.ready) { rampTok++; G.fade.gain.cancelScheduledValues(0); G.fade.gain.value = 1; } } catch {}
+  killOv(ov); S.ov = null;
+  if (audio.paused && S.wantPlay !== false) { audio.play().catch(() => {}); }
 }
 let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35;
 let rampTok = 0;
@@ -1293,7 +1302,12 @@ function discGuard() {
   const d = audio.duration; if (!d || !isFinite(d)) return;
   if ((d - audio.currentTime) > 10 || (S.seeking && (d - curT()) > 4)) npDiscBack();
 }
-setInterval(() => { if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); } }, 100);
+setInterval(() => {
+  const ov = S.ov;
+  if (ov && !ov.handed && real()) { const d = audio.duration; if (audio.ended || (d && isFinite(d) && d - audio.currentTime < 0.12)) { handoff(); return; } }
+  if (ov && ov.handed && ov.hAt && Date.now() - ov.hAt > 8000) { S.ovinfo += ' · atascado, forzado'; failOv(ov); return; }
+  if (S.playing && real()) { maybeDiscOut(); maybeCrossfade(); }
+}, 100);
 function hasNext() { return S.idx + 1 < S.queue.length || S.repeat === 1; }
 function maybeCrossfade() {
   const x = +S.audio.xfade || 0;
