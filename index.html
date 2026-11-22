@@ -267,6 +267,17 @@ input,textarea,select{-webkit-user-select:text;user-select:text}
 .arm{position:absolute;inset:0;transform-origin:93% 9%;transition:transform 1s cubic-bezier(.45,.05,.2,1);z-index:3;pointer-events:none;filter:drop-shadow(3px 5px 5px rgba(0,0,0,.45))}
 .arm.drag{transition:none}
 .arm svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.case{position:absolute;inset:0;z-index:0;pointer-events:none}
+.case::before{content:"";position:absolute;left:-5.5%;top:2%;right:-5.5%;bottom:-7%;border-radius:20px;background:repeating-radial-gradient(circle at 30% 20%,rgba(255,255,255,.035) 0 1px,transparent 1px 3px),linear-gradient(150deg,#e6dcc6,#c6b693 55%,#a99878);box-shadow:0 26px 44px rgba(0,0,0,.55),0 3px 8px rgba(0,0,0,.4),inset 0 0 0 2px rgba(255,255,255,.35),inset 0 -6px 14px rgba(0,0,0,.22)}
+.case .stitch{position:absolute;left:-3.8%;top:4%;right:-3.8%;bottom:-5.2%;border-radius:15px;border:1.5px dashed rgba(90,70,40,.45)}
+.case .deck{position:absolute;left:-2.4%;top:5.6%;right:-2.4%;bottom:-3.2%;border-radius:11px;background:repeating-linear-gradient(90deg,rgba(255,255,255,.025) 0 1px,transparent 1px 3px),linear-gradient(160deg,#3a3a40,#1b1b1e);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12),inset 0 8px 20px rgba(0,0,0,.5)}
+.case .platter{position:absolute;left:-1.5%;top:9.5%;width:93%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle,#232326 0 66%,#6a6a70 67%,#2b2b2f 70%,#101012 100%);box-shadow:0 5px 12px rgba(0,0,0,.65)}
+.case .pivot{position:absolute;left:84.5%;top:0.5%;width:17%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle at 40% 35%,#58585f,#1a1a1d 75%);box-shadow:0 3px 8px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.15)}
+.case .knob{position:absolute;left:86%;top:86%;width:9%;aspect-ratio:1;border-radius:50%;background:radial-gradient(circle at 38% 32%,#f3f3f3,#9a9a9a 62%,#5a5a5a);box-shadow:0 3px 6px rgba(0,0,0,.6)}
+.case .knob::after{content:"";position:absolute;left:47%;top:8%;width:6%;height:34%;background:#222;border-radius:2px}
+.case .slots{position:absolute;left:1.5%;top:91%;width:13%;height:5%;background:repeating-linear-gradient(0deg,#0c0c0d 0 2px,#303034 2px 4px);border-radius:3px;opacity:.9}
+.case .led{position:absolute;left:78%;top:92%;width:2.6%;aspect-ratio:1;border-radius:50%;background:#5a1414;box-shadow:inset 0 0 2px #000}
+.vwrap:not(.idle) .case .led{background:#ff3b30;box-shadow:0 0 8px 2px rgba(255,59,48,.7)}
 .sleeve{position:absolute;left:-5%;top:11%;width:88%;aspect-ratio:1;border-radius:5px;background-size:cover;background-position:center;transform:rotate(-2.2deg);z-index:0;box-shadow:0 22px 38px rgba(0,0,0,.55),0 3px 8px rgba(0,0,0,.45)}
 .sleeve::before{content:"";position:absolute;inset:0;border-radius:5px;background:linear-gradient(135deg,rgba(255,255,255,.18),rgba(255,255,255,0) 38%,rgba(0,0,0,.38)),radial-gradient(circle at 70% 55%,rgba(0,0,0,.45),transparent 62%);box-shadow:inset 0 0 0 1px rgba(255,255,255,.14),inset 0 0 46px rgba(0,0,0,.35)}
 .sleeve::after{content:"";position:absolute;left:3%;right:3%;top:3%;bottom:3%;border-radius:3px;border:1px solid rgba(255,255,255,.10)}
@@ -1049,7 +1060,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v30';
+const APP_VER = 'v31';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -2063,7 +2074,7 @@ const ARM_SVG = '<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidd
 function vinylEl(t) {
   const u = artURL(t);
   const lab = h('div', { class: 'lab', style: u ? { backgroundImage: `url("${u}")` } : { background: tint(t, true, 40) } });
-  const sleeve = h('div', { class: 'sleeve', style: u ? { backgroundImage: `url("${u}")` } : { background: `linear-gradient(135deg,${tint(t, true, 46)},${tint(t, true, 22)})` } });
+  const sleeve = h('div', { class: 'case' }, h('i', { class: 'stitch' }), h('i', { class: 'deck' }), h('i', { class: 'platter' }), h('i', { class: 'pivot' }), h('i', { class: 'slots' }), h('i', { class: 'knob' }), h('i', { class: 'led' }));
   const rec = h('div', { class: 'rec' }, lab), arm = h('div', { class: 'arm', html: ARM_SVG });
   const disc = h('div', { class: 'disc' }, rec, h('div', { class: 'sheen' }));
   const el = h('div', { class: 'vwrap' }, sleeve, disc, arm, h('i', { class: 'hub' }));
