@@ -1040,14 +1040,19 @@ async function loadCurrent(autoplay, ov) {
         const bp = () => Math.max(0, (G.ctx.currentTime - ov.t0)) * ov.rate;
         try { audio.currentTime = bp() + OV_LOAD; } catch {}
         await audio.play();
-        // la nueva sigue sonando desde memoria; ajusto la posición del reproductor (en silencio) hasta que coincida
-        for (let i = 0; i < 4 && S.ov === ov; i++) {
-          await sleep(380); if (S.ov !== ov) return;
-          const diff = audio.currentTime - bp();
-          if (Math.abs(diff) < 0.035) break;
-          OV_LOAD = Math.max(0.02, Math.min(1.5, OV_LOAD - diff)); ls.set('mp.ovload', OV_LOAD);
-          try { audio.currentTime = bp() + OV_LOAD; } catch {}
+        // la nueva sigue sonando desde memoria; ajusto la posición del reproductor (en silencio) midiendo el sonido real hasta que coincida
+        let stall = OV_STALL, prevAhead = null, prevC = 0, dbg = [];
+        for (let i = 0; i < 7 && S.ov === ov; i++) {
+          await sleep(i ? 420 : 350); if (S.ov !== ov) return;
+          let ahead = measureAhead(ov), how = 'a';
+          if (ahead == null) { ahead = audio.currentTime - bp() - 0.0; how = 't'; }
+          dbg.push(how + (ahead * 1000).toFixed(0) + (how === 'a' ? '/t' + ((audio.currentTime - bp()) * 1000).toFixed(0) : ''));
+          if (Math.abs(ahead) < 0.012) break;
+          if (prevAhead != null && how === 'a') { stall = Math.max(0, Math.min(0.8, prevAhead + prevC - ahead)); }
+          const c = stall - ahead; prevAhead = ahead; prevC = c;
+          try { audio.currentTime = Math.max(0, audio.currentTime + c); } catch {}
         }
+        OV_STALL = stall; ls.set('mp.ovstall', stall); S.ovinfo += ' · alineado [' + dbg.join(' ') + ' ms]';
         if (S.ov !== ov) return;
         S.ovinfo += ' · listo';
         rampFade(0, 1, 0.15, 'lin'); ramp2(ov.gb.gain, ov.gb.gain.value, 0, 0.15, 'lin', () => S.ov === ov);
@@ -1060,7 +1065,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v31';
+const APP_VER = 'v32';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1115,11 +1120,37 @@ function startOverlap(rem) {
     const src = G.ctx.createBufferSource(); src.buffer = G.buf; src.playbackRate.value = rate;
     const gb = G.ctx.createGain(); gb.gain.value = 0; src.connect(gb); gb.connect(G.pre);
     const ov = { src, gb, t0: G.ctx.currentTime + d, rate, handed: false, ni };
+    try {
+      if (!G.anA) { G.anA = G.ctx.createAnalyser(); G.anA.fftSize = 32768; G.anA.smoothingTimeConstant = 0; G.src.connect(G.anA); }
+      ov.anB = G.ctx.createAnalyser(); ov.anB.fftSize = 32768; ov.anB.smoothingTimeConstant = 0; src.connect(ov.anB);
+    } catch (e) { ov.anB = null; }
     S.ov = ov; src.start(ov.t0);
     S.ovinfo = 'último cambio: entra la nueva tras ' + d.toFixed(1) + ' s (faltaban ' + rem.toFixed(1) + ' s)';
     setTimeout(() => { if (S.ov === ov) ramp2(gb.gain, 0, 1, Math.max(0.3, rem - d - 0.05), 'in', () => S.ov === ov && !ov.handed); }, d * 1000);
     return true;
   } catch (e) { console.warn('overlap', e); if (S.ov) killOv(S.ov); return false; }
+}
+// compara lo que suena por el reproductor con lo que suena desde memoria (correlación) y dice cuántos segundos va adelantado el reproductor
+function measureAhead(ov) {
+  try {
+    if (!G.anA || !ov.anB) return null;
+    const n = G.anA.fftSize, a = new Float32Array(n), b = new Float32Array(n);
+    G.anA.getFloatTimeDomainData(a); ov.anB.getFloatTimeDomainData(b);
+    const D = 4, m = Math.floor(n / D), A = new Float32Array(m), B = new Float32Array(m);
+    for (let i = 0; i < m; i++) { let x = 0, y = 0; for (let k = 0; k < D; k++) { x += a[i * D + k]; y += b[i * D + k]; } A[i] = x; B[i] = y; }
+    const sr = G.ctx.sampleRate / D, maxL = Math.floor(0.25 * sr), W = m - 2 * maxL; if (W < 1000) return null;
+    let ea = 0; for (let i = 0; i < W; i++) ea += A[maxL + i] * A[maxL + i];
+    if (ea < 1e-6) return null;
+    let best = -1, bl = 0;
+    for (let l = -maxL; l <= maxL; l++) {
+      let c = 0, eb = 0; const o = maxL + l;
+      for (let i = 0; i < W; i += 2) { const bb = B[o + i]; c += A[maxL + i] * bb; eb += bb * bb; }
+      if (eb < 1e-9) continue; const r = c / Math.sqrt(eb);
+      if (r > best) { best = r; bl = l; }
+    }
+    const conf = best / Math.sqrt(ea / 2 * 1);
+    return conf > 0.55 ? bl / sr : null;
+  } catch { return null; }
 }
 function handoff() {
   const ov = S.ov; if (!ov || ov.handed) return; ov.handed = true;
@@ -1133,7 +1164,7 @@ function failOv(ov) {
   killOv(ov); S.ov = null;
   if (audio.paused && S.wantPlay !== false) { audio.play().catch(() => {}); }
 }
-let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35;
+let OV_LOAD = +ls.get('mp.ovload', 0.35) || 0.35, OV_STALL = +ls.get('mp.ovstall', 0.15) || 0.15;
 let rampTok = 0;
 // fundido hecho a mano (sin curvas programadas, que Safari a veces ignora o rechaza)
 function rampFade(from, to, secs, shape) {
