@@ -1042,17 +1042,15 @@ async function loadCurrent(autoplay, ov) {
         await audio.play();
         // la nueva sigue sonando desde memoria; ajusto la posición del reproductor (en silencio) midiendo el sonido real hasta que coincida
         let stall = OV_STALL, prevAhead = null, prevC = 0, dbg = [];
-        for (let i = 0; i < 9 && S.ov === ov; i++) {
-          await sleep(i ? 520 : 400); if (S.ov !== ov) return;
-          const tAh = audio.currentTime - bp();
-          let ahead = Math.abs(tAh) > 0.1 ? null : measureAhead(ov), how = 'a';
-          if (ahead == null) { ahead = tAh; how = 't'; }
+        for (let i = 0; i < 7 && S.ov === ov; i++) {
+          await sleep(i ? 420 : 350); if (S.ov !== ov) return;
+          let ahead = measureAhead(ov), how = 'a';
+          if (ahead == null) { ahead = audio.currentTime - bp() - 0.0; how = 't'; }
           dbg.push(how + (ahead * 1000).toFixed(0) + (how === 'a' ? '/t' + ((audio.currentTime - bp()) * 1000).toFixed(0) : ''));
-          if (Math.abs(ahead) < 0.010 && how === 'a') break;
-          if (Math.abs(ahead) < 0.02 && how === 't' && i >= 2) break;
-          if (prevAhead != null) { stall = Math.max(0, Math.min(0.8, prevAhead + prevC - ahead)); }
+          if (Math.abs(ahead) < 0.012) break;
+          if (prevAhead != null && how === 'a') { stall = Math.max(0, Math.min(0.8, prevAhead + prevC - ahead)); }
           const c = stall - ahead; prevAhead = ahead; prevC = c;
-          try { audio.currentTime = Math.max(0, audio.currentTime + c + 0.002); } catch {}
+          try { audio.currentTime = Math.max(0, audio.currentTime + c); } catch {}
         }
         OV_STALL = stall; ls.set('mp.ovstall', stall); S.ovinfo += ' · alineado [' + dbg.join(' ') + ' ms]';
         if (S.ov !== ov) return;
@@ -1067,7 +1065,7 @@ async function loadCurrent(autoplay, ov) {
     catch (e) { console.warn('play', e); S.playing = false; onState(); toast('Toca ▶ para reproducir'); }
   }
 }
-const APP_VER = 'v33';
+const APP_VER = 'v32';
 function fadeWhy() {
   const x = +S.audio.xfade || 0, d = audio.duration;
   if (!x) return 'fundido apagado (pon segundos arriba)';
@@ -1140,17 +1138,17 @@ function measureAhead(ov) {
     G.anA.getFloatTimeDomainData(a); ov.anB.getFloatTimeDomainData(b);
     const D = 4, m = Math.floor(n / D), A = new Float32Array(m), B = new Float32Array(m);
     for (let i = 0; i < m; i++) { let x = 0, y = 0; for (let k = 0; k < D; k++) { x += a[i * D + k]; y += b[i * D + k]; } A[i] = x; B[i] = y; }
-    const sr = G.ctx.sampleRate / D, maxL = Math.floor(0.12 * sr), W = Math.floor(0.2 * sr), s0 = m - maxL - W;   // ventana de lo más reciente
-    let ea = 0; for (let i = 0; i < W; i++) ea += A[s0 + i] * A[s0 + i];
+    const sr = G.ctx.sampleRate / D, maxL = Math.floor(0.25 * sr), W = m - 2 * maxL; if (W < 1000) return null;
+    let ea = 0; for (let i = 0; i < W; i++) ea += A[maxL + i] * A[maxL + i];
     if (ea < 1e-6) return null;
     let best = -1, bl = 0;
     for (let l = -maxL; l <= maxL; l++) {
-      let c = 0, eb = 0; const o = s0 + l;
-      for (let i = 0; i < W; i++) { const bb = B[o + i]; c += A[s0 + i] * bb; eb += bb * bb; }
+      let c = 0, eb = 0; const o = maxL + l;
+      for (let i = 0; i < W; i += 2) { const bb = B[o + i]; c += A[maxL + i] * bb; eb += bb * bb; }
       if (eb < 1e-9) continue; const r = c / Math.sqrt(eb);
       if (r > best) { best = r; bl = l; }
     }
-    const conf = best / Math.sqrt(ea);
+    const conf = best / Math.sqrt(ea / 2 * 1);
     return conf > 0.55 ? bl / sr : null;
   } catch { return null; }
 }
